@@ -38,12 +38,14 @@ After obtaining the processed sequence, you can simply run `kinfu.py`. For examp
 
 ```
 python kinfu.py --config configs/fr1_desk.yaml --save_dir reconstruct/fr1_desk
+python kinfu_our.py --config configs/seq006.yaml --save_dir reconstruct/seq006
 ```
 
 which will perform the tracking and mapping headlessly and save the results. Or you could run:
 
 ```
 python kinfu_gui.py --config configs/fr1_desk.yaml
+python kinfu_gui_our.py --config configs/seq006.yaml
 ```
 
 If you want to visualize the tracking and reconstruction process on-the-fly.
