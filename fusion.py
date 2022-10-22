@@ -28,7 +28,9 @@ def integrate(
     # Convert camera coordinates to pixel coordinates
     fx, fy = cam_intr[0, 0], cam_intr[1, 1]
     cx, cy = cam_intr[0, 2], cam_intr[1, 2]
+    print('cam_intr', cam_intr)
     pix_z = cam_c[:, 2]
+    print('cam_c', cam_c, cam_c.shape)
     # project all the voxels back to image plane
     pix_x = torch.round((cam_c[:, 0] * fx / cam_c[:, 2]) + cx).long()  # [nx*ny*nz]
     pix_y = torch.round((cam_c[:, 1] * fy / cam_c[:, 2]) + cy).long()  # [nx*ny*nz]
