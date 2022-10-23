@@ -46,7 +46,7 @@ cam_file = os.path.join(data_path, "cameras.npz")
 cam_dict = np.load(cam_file)
 print(verts.shape)
 intrinsics, c2w = load_K_Rt_from_P(cam_dict["world_mats"][2])
-intrinsics = intrinsics.astype(np.float32)
+intrinsics = torch.tensor(intrinsics.copy()).float()
 print(intrinsics)
 import time 
 from numba import njit
@@ -60,43 +60,75 @@ def get_bounding_box(points):
    return [int(x) for x in [points[:,0].min(), points[:,0].max(), points[:,1].min(), points[:,1].max()]]
 
 poses = np.load('reconstruct/seq006/traj_gt.npz')['poses']
-print(poses.shape, poses)
-R,t = decompose_se3(torch.inverse(poses[0])) # c2w -> world 2 cam
-print(R.shape, t.shape)
-verts = (intrinsics[:3, :3]@verts.transpose()).transpose()
-verts = (R@verts.transpose() + t).transpose()
-verts_before = verts[faces]
+# print(poses.shape, poses)
+R,t = decompose_se3(np.linalg.inv(poses[0]))
+R,t  = torch.tensor(R), torch.tensor(t) # c2w -> world 2 cam
+# print(R.shape, t.shape)
+verts_t = torch.tensor(verts.copy())
+faces_t = torch.tensor(faces.copy(),dtype=torch.long)
+points_out = torch.zeros(480, 640)
+verts_t = (intrinsics[:3, :3]@verts_t.transpose(1,0)).transpose(1,0)
+verts_t = (R@verts_t.transpose(1,0) + t).transpose(1,0)
+verts_before = verts_t[faces]
 
-verts = verts[:,:2] / verts[:,2][:,None]
-verts_after = verts[faces]
-print(verts_after[0])
-@njit
-def try_run(verts_after, verts_before):
-  points_out = np.zeros((480, 640))
-  H,W = points_out.shape
-#   K = np.eye(3).astype(np.float32)
-  for i in range(verts_after.shape[0]):
-    vv = verts_before[i]
-    # print(K.dot(vv.transpose()))
-    coos = verts_after[i]
-    # print(coos.shape, vv[:,2].reshape(3,1))
+verts_a = verts_t / verts_t[:,2][:,None]
+verts_a[:,2] = verts_t[:,2]
+verts_after = verts_a[faces]
+# print(verts_after[0])
+def refactor(verts_after: torch.Tensor, points_out):
+    # K = torch.eye(3).float()
+    H, W = points_out.shape
 
-    xmin,xmax,ymin,ymax = get_bounding_box(coos)
+    # N, 3, 3
+    coos = verts_after
 
-    if xmin < 0 or ymin < 0 or xmax > W or ymax > H:
-      # print(xmin,xmax,ymin,ymax)
-      continue
+    coos = coos.int()
+    xmin, _ = coos[:, :, 0].min(dim=1)
+    ymin, _ = coos[:, :, 1].min(dim=1)
 
-    for x in range(xmin,xmax,1):
-      for y in range(ymin,ymax,1):
-        z = (vv[0][2] + vv[1][2] + vv[2][2])/3
-        # print(z)
+    xmax, _ = coos[:, :, 0].max(dim=1)
+    ymax, _ = coos[:, :, 1].max(dim=1)
 
-        if z>0 and (z < points_out[y,x] or points_out[y,x]<1e-9) and z < 4000:
-          points_out[y,x] = z
-          # print(points_out[x,y])
-  return points_out
-points_out = try_run(verts_after, verts_before)
+    # mask: shape N
+    mask = (xmin < 0).logical_or(ymin < 0).logical_or(xmax > W).logical_or(ymax > H)
+
+
+    # z: shape: N
+    # import pdb; pdb.set_trace()
+    z: torch.Tensor = (verts_after[:,0,2] + verts_after[:, 1, 2]+ verts_after[:, 2, 2]) / 3 
+    
+
+    # mask = torch.logical_and(z > 0, z < 4).logical_and(mask)
+    mask = mask.logical_or(z < 0).logical_or(z > 4)
+    z[mask] = float("infinity")
+
+    n = coos.shape[0]
+
+    #  big_points_out = torch.ones((n, H, W))
+    #  tmp_mask = torch.ones(big_points_out, dtype=int) * n
+    tmp_mask = torch.ones((H, W), dtype=int) * n
+    index = torch.argsort(z, descending=True)
+
+    # move back to numpy and list to reduce pytorch's overhead
+    xmin = xmin[index].tolist()
+    ymin = ymin[index].tolist()
+    ymax = ymax[index].tolist()
+    xmax = xmax[index].tolist()
+    # points_out = torch.zeros((200, 640))
+    index = index.cpu().numpy()
+    tmp_mask = tmp_mask.cpu().numpy()
+
+    for i, x1, y1, x2, y2 in zip(index, xmin, ymin, xmax, ymax):
+        tmp_mask[y1:y2, x1:x2] = i
+
+    z = np.concatenate([z, np.array([float("infinity")])])
+    points_out = z[tmp_mask]
+
+    points_out[np.isinf(points_out)] = 0
+
+    return points_out
+points_out = refactor(verts_after, points_out)
+# points_out = try_run(verts_after, verts_before)
 print("done ", time.time() - t1)
 
 import matplotlib.pyplot as plt
