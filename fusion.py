@@ -286,6 +286,18 @@ class TSDFVolumeTorch:
                          & (vox_coord[..., 2] >= margin) & (vox_coord[..., 2] < self.vol_dim[2] - margin)
         return valid_pts_mask
 
+    @torch.no_grad()
+    def render_depth(self, c2w, intri, imh, imw, nodes):
+        # extract canonical mesh  
+        verts, faces, norms = self.get_mesh()
+        # transform to live frame 
+        H,W = imh, imw 
+        
+        # get depth map  
+
+        return 
+
+
     # use simple root finding
     @torch.no_grad()
     def render_model(self, c2w, intri, imh, imw, near=0.5, far=5., n_samples=192):

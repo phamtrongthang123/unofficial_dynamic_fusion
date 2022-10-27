@@ -106,7 +106,7 @@ class DynFu():
         self._faces = faces
         nodes_v, nodes_idx = uniform_sample(self._vertices, self._radius)
         # define list of node warp
-        self._nodes = [] 
+        self._nodes = []  
         for j in range(len(nodes_v)):
             self._nodes.append((nodes_idx[j],
                                 nodes_v[j],

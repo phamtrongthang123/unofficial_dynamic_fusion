@@ -3,6 +3,8 @@ from numpy import linalg as la
 from scipy.spatial import KDTree
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
+import torch 
+
 # Radius-based spatial subsampling
 def uniform_sample(arr,radius):
     """
@@ -33,26 +35,68 @@ def uniform_sample(arr,radius):
 def cal_dist(a,b):
     return la.norm(a-b)
 
-# Construct deformation graph from canonical vertices
-def construct_graph(self):
-    # uniform sampling
-    nodes_v, nodes_idx = uniform_sample(self._vertices, self._radius)
 
 
-    '''
-    Each node is a 4-tuple (index of corresponding surface vertex dg_idx, 3D position dg_v, 4x4 Transformation dg_se3, weight dg_w) 
-    HackHack:
-    Not sure how to determine dgw. Use sample radius for now.
-    '''
-    for i in range(len(nodes_v)):
-        self._nodes.append((nodes_idx[i],
-                            nodes_v[i],
-                            np.array([1, 0.00, 0.00, 0.00, 0.00, 0.01, 0.01, 0.00], dtype=np.float32),
-                            2 * self._radius))
+def decompose_se3(M):
+    return M[:, :3,:3], M[:, :3, [3]] # (torch.Size([bs, 3, 3]), torch.Size([bs, 3, 1]))
 
-    # construct kd tree
-    self._kdtree = KDTree(nodes_v)
-    self._neighbor_look_up = []
-    for vert in self._vertices:
-        dists, idx = self._kdtree.query(vert, k=self._knn)
-        self._neighbor_look_up.append(idx)
+  
+def get_diag(a):
+    return a.diagonal(dim1=-2, dim2=-1).diag_embed(dim1=-2, dim2=-1)
+
+def cat1(a):
+    assert len(a.shape) == 2 # batch, 3
+    return torch.cat([a, torch.ones(a.shape[0],1)], dim=1)
+
+def custom_transpose(a):
+    return a.permute(*torch.arange(a.ndim - 1, -1, -1))
+def custom_transpose_batch(a):
+    return a.permute(0,*torch.arange(a.ndim - 1, 0, -1))
+
+def batch_eye(bs, dim):
+    x = torch.eye(dim)
+    x = x.reshape((1, dim, dim))
+    y = x.repeat(bs, 1, 1)
+    return y
+def compose_se3(R,t):
+    bs, _,_ = R.shape
+    T = batch_eye(bs, 4)
+    T[:,:3,:3] = R.clone()
+    T[:,:3,[3]] = t.clone()
+    return T
+
+def robust_Tukey_penalty(value, c):
+  # https://mathworld.wolfram.com/TukeysBiweight.html
+  if value.abs() > c: 
+    return torch.tensor(0.0) 
+  return value * (1- value**2 / c**2)**2
+
+def huber_penalty(value,c):
+    if value.abs() <= c:
+        return 0.5 * (value**2)
+    else:
+        return c * (value.abs() - 0.5*c)
+
+def SE3(dq):
+  # from https://www.cs.utah.edu/~ladislav/kavan07skinning/kavan07skinning.pdf
+  out = torch.zeros(dq.shape[0], 4,4)
+  out[:,0,0] = 1 - 2*(dq[:,2]**2 + dq[:,3]**2)
+  out[:,0,1] = 2 * dq[:,1]*dq[:,2] - 2*dq[:,0]*dq[:,3] 
+  out[:,0,2] = 2 * dq[:,1]*dq[:,3] + 2*dq[:,0]*dq[:,2] 
+  out[:,0,3] = 2 * (-dq[:,4]*dq[:,1] + dq[:,5]*dq[:,0] - dq[:,6] *dq[:,3] + dq[:,7]*dq[:,2] )
+  out[:,1,0] = 2 *dq[:,1]*dq[:,2] + 2*dq[:,0]*dq[:,3] 
+  out[:,1,1] = 1 - 2*dq[:,1]**2 - 2*dq[:,3]**2 
+  out[:,1,2] = 2*dq[:,2]*dq[:,3] - 2*dq[:,0]*dq[:,1] 
+  out[:,1,3] = 2*(-dq[:,4]*dq[:,2] + dq[:,5]*dq[:,3] + dq[:,6]*dq[:,0] - dq[:,7]*dq[:,1])
+  out[:,2,0] = 2*dq[:,1]*dq[:,3] - 2*dq[:,0]*dq[:,2] 
+  out[:,2,1] = 2*dq[:,2]*dq[:,3] + 2 *dq[:,0]*dq[:,1] 
+  out[:,2,2] = 1-2*dq[:,1]**2 - 2*dq[:,2]**2 
+  out[:,2,3] = 2*(-dq[:,4]*dq[:,3] -dq[:,5]*dq[:,2] +dq[:,6]*dq[:,1] +dq[:,7]*dq[:,0])
+  return out 
+
+
+def average_edge_dist_in_face( f, verts):
+    v1 = verts[f[0]]
+    v2 = verts[f[1]]
+    v3 = verts[f[2]]
+    return (cal_dist(v1,v2) + cal_dist(v1,v3) + cal_dist(v2,v3))/3
