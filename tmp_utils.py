@@ -50,7 +50,9 @@ def cat1(a):
 
 def custom_transpose(a):
     return a.permute(*torch.arange(a.ndim - 1, -1, -1))
-def custom_transpose_batch(a):
+def custom_transpose_batch(a, isknn=False):
+    if isknn:
+        return a.permute(0,1,*torch.arange(a.ndim - 1, 1, -1))
     return a.permute(0,*torch.arange(a.ndim - 1, 0, -1))
 
 def batch_eye(bs, dim):
@@ -79,21 +81,49 @@ def huber_penalty(value,c):
 
 def SE3(dq):
   # from https://www.cs.utah.edu/~ladislav/kavan07skinning/kavan07skinning.pdf
-  out = torch.zeros(dq.shape[0], 4,4)
-  out[:,0,0] = 1 - 2*(dq[:,2]**2 + dq[:,3]**2)
-  out[:,0,1] = 2 * dq[:,1]*dq[:,2] - 2*dq[:,0]*dq[:,3] 
-  out[:,0,2] = 2 * dq[:,1]*dq[:,3] + 2*dq[:,0]*dq[:,2] 
-  out[:,0,3] = 2 * (-dq[:,4]*dq[:,1] + dq[:,5]*dq[:,0] - dq[:,6] *dq[:,3] + dq[:,7]*dq[:,2] )
-  out[:,1,0] = 2 *dq[:,1]*dq[:,2] + 2*dq[:,0]*dq[:,3] 
-  out[:,1,1] = 1 - 2*dq[:,1]**2 - 2*dq[:,3]**2 
-  out[:,1,2] = 2*dq[:,2]*dq[:,3] - 2*dq[:,0]*dq[:,1] 
-  out[:,1,3] = 2*(-dq[:,4]*dq[:,2] + dq[:,5]*dq[:,3] + dq[:,6]*dq[:,0] - dq[:,7]*dq[:,1])
-  out[:,2,0] = 2*dq[:,1]*dq[:,3] - 2*dq[:,0]*dq[:,2] 
-  out[:,2,1] = 2*dq[:,2]*dq[:,3] + 2 *dq[:,0]*dq[:,1] 
-  out[:,2,2] = 1-2*dq[:,1]**2 - 2*dq[:,2]**2 
-  out[:,2,3] = 2*(-dq[:,4]*dq[:,3] -dq[:,5]*dq[:,2] +dq[:,6]*dq[:,1] +dq[:,7]*dq[:,0])
-  return out 
+  # i have to do this because vmap require outplace operator
+  out = []
+  dq = dq.view(1,8)
+  out.append(1 - 2*(dq[:,2]**2 + dq[:,3]**2))
+  out.append(2 * dq[:,1]*dq[:,2] - 2*dq[:,0]*dq[:,3])
+  out.append(2 * dq[:,1]*dq[:,3] + 2*dq[:,0]*dq[:,2] )
+  out.append(2 * (-dq[:,4]*dq[:,1] + dq[:,5]*dq[:,0] - dq[:,6] *dq[:,3] + dq[:,7]*dq[:,2] ))
+  out.append(2 *dq[:,1]*dq[:,2] + 2*dq[:,0]*dq[:,3] )
+  out.append(1 - 2*dq[:,1]**2 - 2*dq[:,3]**2 )
+  out.append(2*dq[:,2]*dq[:,3] - 2*dq[:,0]*dq[:,1]) 
+  out.append(2*(-dq[:,4]*dq[:,2] + dq[:,5]*dq[:,3] + dq[:,6]*dq[:,0] - dq[:,7]*dq[:,1]))
+  out.append(2*dq[:,1]*dq[:,3] - 2*dq[:,0]*dq[:,2] )
+  out.append(2*dq[:,2]*dq[:,3] + 2 *dq[:,0]*dq[:,1] )
+  out.append(1-2*dq[:,1]**2 - 2*dq[:,2]**2 )
+  out.append(2*(-dq[:,4]*dq[:,3] -dq[:,5]*dq[:,2] +dq[:,6]*dq[:,1] +dq[:,7]*dq[:,0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([1]))
+  return torch.cat(out).view(1,4,4)
 
+def SE3_novmap(dq):
+  # from https://www.cs.utah.edu/~ladislav/kavan07skinning/kavan07skinning.pdf
+  # add if else inside a function with tracing is asking for trouble, so I split another function for quick testing
+  # this dq shape = bs,knn,8
+  out = []
+  out.append(1 - 2*(dq[:,2]**2 + dq[:,3]**2))
+  out.append(2 * dq[:,1]*dq[:,2] - 2*dq[:,0]*dq[:,3])
+  out.append(2 * dq[:,1]*dq[:,3] + 2*dq[:,0]*dq[:,2] )
+  out.append(2 * (-dq[:,4]*dq[:,1] + dq[:,5]*dq[:,0] - dq[:,6] *dq[:,3] + dq[:,7]*dq[:,2] ))
+  out.append(2 *dq[:,1]*dq[:,2] + 2*dq[:,0]*dq[:,3] )
+  out.append(1 - 2*dq[:,1]**2 - 2*dq[:,3]**2 )
+  out.append(2*dq[:,2]*dq[:,3] - 2*dq[:,0]*dq[:,1]) 
+  out.append(2*(-dq[:,4]*dq[:,2] + dq[:,5]*dq[:,3] + dq[:,6]*dq[:,0] - dq[:,7]*dq[:,1]))
+  out.append(2*dq[:,1]*dq[:,3] - 2*dq[:,0]*dq[:,2] )
+  out.append(2*dq[:,2]*dq[:,3] + 2 *dq[:,0]*dq[:,1] )
+  out.append(1-2*dq[:,1]**2 - 2*dq[:,2]**2 )
+  out.append(2*(-dq[:,4]*dq[:,3] -dq[:,5]*dq[:,2] +dq[:,6]*dq[:,1] +dq[:,7]*dq[:,0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([0]))
+  out.append(torch.tensor([1]))
+  return torch.cat(out).view(dq.shape[0],4,4)
 
 def average_edge_dist_in_face( f, verts):
     v1 = verts[f[0]]

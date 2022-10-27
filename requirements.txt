@@ -1,1 +1,3 @@
 trimesh
+einops
+functorch
