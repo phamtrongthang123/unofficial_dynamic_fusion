@@ -130,3 +130,31 @@ def average_edge_dist_in_face( f, verts):
     v2 = verts[f[1]]
     v3 = verts[f[2]]
     return (cal_dist(v1,v2) + cal_dist(v1,v3) + cal_dist(v2,v3))/3
+
+
+def blending(Xc, dqs, dgw, dgv):
+    repxc = Xc.view(1, 3).repeat_interleave(dgv.shape[0],0)
+    assert repxc.shape == dgv.shape 
+    wixc = torch.exp(-torch.linalg.norm(dgv - repxc, dim=1)**2 / (2*torch.pow(dgw,2)))
+    print(wixc)
+    assert wixc.shape == dgw.shape
+    qkc = torch.einsum('i,ik->k',wixc,dqs)
+    # qkc = dqs[0]+dqs[1]
+    assert qkc.shape[0] == 8 and len(qkc.shape)==1
+    # dem = torch.linalg.norm(qkc[:4])
+    out = dqnorm(qkc)
+    # print(out)
+    return out 
+
+def dqnorm(dq):
+    norm = torch.linalg.norm(dq[:4].view(-1))
+    dq1 = dq[:4]/norm 
+    dq2 = dq[4:]
+    dq2 = dq[4:] - torch.dot(dq[4:], dq[:4]) * dq[:4]
+    dq_ret = torch.cat((dq1, dq2))
+    return dq_ret
+
+def get_W(Xc, Tlw, dqs, dgw, dgv):
+    dqb = blending(Xc, dqs, dgw, dgv).view(1,8)
+    T = torch.einsum('ij,bjk -> bik',Tlw, SE3(dqb))
+    return T 

@@ -292,7 +292,7 @@ class TSDFVolumeTorch:
         verts, faces, norms = self.get_mesh()
         # transform to live frame 
         H,W = imh, imw 
-        
+
         # get depth map  
 
         return 
