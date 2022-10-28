@@ -123,7 +123,7 @@ def test_GN_blendingW():
     compute_batch_jacobian = vmap(jacrev(energy, argnums=2, has_aux=True), in_dims=(0, None, 0,0,0,0))
     solve_vmap = vmap(solve_,in_dims=(0,0))
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
-    lmda = 0
+    lmda = 1e-6
     for i in range(5):
         jse3,fx = compute_batch_jacobian(Xc,Tlw, dqs, dgw, dgv, target)   
         j = jse3.view(bs, knn, 1,8) # [bs,knn,1,8], because we return norm / scalar so the jac has the same shape as input dqs
@@ -133,7 +133,7 @@ def test_GN_blendingW():
         # error is a number for each batch, so we only need to multiply it inside normally 
         b = torch.einsum('bkij,bj->bki', jT,fx.view(bs,1)).view(bs*knn,8,1) # [bs, knn,8, 1]
         solved_delta = solve_vmap(A, b) # [bs*knn,8,1]
-        dqs -= 0.1 * solved_delta.view(dqs.shape) # set 0.1 here helps
+        dqs -=  0.2*solved_delta.view(dqs.shape) # set 0.2 here helps
         dqs = dqnorm_vmap(dqs.view(-1,8)).view(bs,knn,8)
         print("log: ", torch.sum(fx), torch.sum(solved_delta.abs()), torch.linalg.norm(A)) # if this decreases each time, then we are success, probably .-. 
     

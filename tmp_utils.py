@@ -136,7 +136,6 @@ def blending(Xc, dqs, dgw, dgv):
     repxc = Xc.view(1, 3).repeat_interleave(dgv.shape[0],0)
     assert repxc.shape == dgv.shape 
     wixc = torch.exp(-torch.linalg.norm(dgv - repxc, dim=1)**2 / (2*torch.pow(dgw,2)))
-    print(wixc)
     assert wixc.shape == dgw.shape
     qkc = torch.einsum('i,ik->k',wixc,dqs)
     # qkc = dqs[0]+dqs[1]
