@@ -124,7 +124,7 @@ def test_GN_blendingW():
     solve_vmap = vmap(solve_,in_dims=(0,0))
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
     lmda = 0
-    for i in range(40):
+    for i in range(5):
         jse3,fx = compute_batch_jacobian(Xc,Tlw, dqs, dgw, dgv, target)   
         j = jse3.view(bs, knn, 1,8) # [bs,knn,1,8], because we return norm / scalar so the jac has the same shape as input dqs
         jT = custom_transpose_batch(j,isknn=True) # [bs,knn,8,1]

@@ -2,3 +2,5 @@ trimesh
 einops
 functorch
 vedo
+transformations
+dq3d

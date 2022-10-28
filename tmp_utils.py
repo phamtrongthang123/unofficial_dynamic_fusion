@@ -149,8 +149,8 @@ def blending(Xc, dqs, dgw, dgv):
 def dqnorm(dq):
     norm = torch.linalg.norm(dq[:4].view(-1))
     dq1 = dq[:4]/norm 
-    dq2 = dq[4:]
-    dq2 = dq[4:] - torch.dot(dq[4:], dq[:4]) * dq[:4]
+    dq2 = dq[4:]/norm 
+    dq2 = dq2 - torch.dot(dq2, dq1) * dq1
     dq_ret = torch.cat((dq1, dq2))
     return dq_ret
 
