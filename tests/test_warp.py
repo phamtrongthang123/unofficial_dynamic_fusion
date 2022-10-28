@@ -71,7 +71,7 @@ def test_GN_blendingW():
     # the exp is sensitive, if the element is too large, the dual blending will break. 
     _radius = torch.tensor(1)
     nodes_v_t = torch.randn(52,3)
-    nodes_v_t = torch.tensor([[0,2,0], [4,2,0],[5,2,1], [8,2,1]])
+    nodes_v_t = torch.tensor([[0,0.2,0], [0.4,0.2,0],[0.5,0.2,1], [0.8,0.2,0.1]])
     _nodes = []  
     for j in range(len(nodes_v_t)):
         _nodes.append([nodes_v_t[j],
@@ -82,9 +82,9 @@ def test_GN_blendingW():
     bs = 2 
     knn = 2
     Xc = torch.randn(bs,3).float()*3
-    Xc = torch.tensor([[2,0,0],[7,0,1]]).float()
+    Xc = torch.tensor([[0.2,0,0],[0.7,0,0.1]]).float()
     target = torch.ones(bs,3).float()
-    target = torch.tensor([[2,2,0], [6.5,2,1]]).float()
+    target = torch.tensor([[0.2,0.2,0], [0.65,0.2,0.1]]).float()
     Tlw = torch.eye(4)
     dqs = []
     dgw = [] 
@@ -124,7 +124,7 @@ def test_GN_blendingW():
     solve_vmap = vmap(solve_,in_dims=(0,0))
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
     lmda = 0
-    for i in range(50):
+    for i in range(40):
         jse3,fx = compute_batch_jacobian(Xc,Tlw, dqs, dgw, dgv, target)   
         j = jse3.view(bs, knn, 1,8) # [bs,knn,1,8], because we return norm / scalar so the jac has the same shape as input dqs
         jT = custom_transpose_batch(j,isknn=True) # [bs,knn,8,1]
@@ -133,15 +133,16 @@ def test_GN_blendingW():
         # error is a number for each batch, so we only need to multiply it inside normally 
         b = torch.einsum('bkij,bj->bki', jT,fx.view(bs,1)).view(bs*knn,8,1) # [bs, knn,8, 1]
         solved_delta = solve_vmap(A, b) # [bs*knn,8,1]
-        dqs -= 0.1*solved_delta.view(dqs.shape) # set 0.1 here helps
+        dqs -= 0.1 * solved_delta.view(dqs.shape) # set 0.1 here helps
         dqs = dqnorm_vmap(dqs.view(-1,8)).view(bs,knn,8)
-        print(torch.sum(fx), torch.linalg.norm(solved_delta)) # if this decreases each time, then we are success, probably .-. 
+        print("log: ", torch.sum(fx), torch.sum(solved_delta.abs()), torch.linalg.norm(A)) # if this decreases each time, then we are success, probably .-. 
     
     for jj in range(bs):
         T = get_W(Xc[jj], Tlw, dqs[jj], dgw[jj], dgv[jj])
         R, t= decompose_se3(T)
         Xt =  (torch.einsum('bij,j->bi', R, Xc[jj]) + t.squeeze(-1)).squeeze()
         print(Xt)
-        assert torch.allclose(Xt, target[jj], rtol=1e-1, atol=1e-02) # should pass
-
+        print(R)
+        print(t)
+        assert torch.allclose(Xt, target[jj], rtol=1e-1, atol=1e-02), f"{Xt} is different from {target[jj]}" # should pass
 
