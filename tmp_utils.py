@@ -4,6 +4,15 @@ from scipy.spatial import KDTree
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 import torch 
+import pytorch3d
+import pytorch3d.utils
+from pytorch3d.io import IO, load_ply
+from pytorch3d.structures import Meshes
+from pytorch3d.renderer import (
+    RasterizationSettings, BlendParams,
+    MeshRenderer, MeshRasterizer, HardPhongShader
+)
+from pytorch3d.ops import interpolate_face_attributes
 
 # Radius-based spatial subsampling
 def uniform_sample(arr,radius):
@@ -157,3 +166,24 @@ def get_W(Xc, Tlw, dqs, dgw, dgv):
     dqb = blending(Xc, dqs, dgw, dgv).view(1,8)
     T = torch.einsum('ij,bjk -> bik',Tlw, SE3(dqb))
     return T 
+
+
+def render_depth(R,t,K, verts, faces, raster_settings, image_size, device):
+    assert K.shape == (1,3,3), print(K.shape)
+    assert R.shape == (1,3,3), print(R.shape)
+    assert t.shape == (1,3), print(t, t.shape)
+
+    mesh = Meshes(verts=[verts.to(device)], faces=[faces.to(device)])
+    image_size_t = torch.tensor(image_size).view(1,2)
+    camera_torch = pytorch3d.utils.cameras_from_opencv_projection(R=R, tvec=t, camera_matrix=K, image_size=image_size_t)
+    mesh_raster = MeshRasterizer(cameras=camera_torch, raster_settings=raster_settings).to(device)
+    fragments = mesh_raster(mesh)
+    depth_map = fragments.zbuf[0].view(image_size).detach().cpu().numpy()
+    vertex_normals = mesh.verts_normals_packed()  # (V, 3)
+    faces_normals = vertex_normals[faces]
+    ones = torch.ones_like(fragments.bary_coords)
+    # normal map don't need interpolate bary coord
+    normal_map = interpolate_face_attributes(fragments.pix_to_face, ones, faces_normals).view(image_size[0], image_size[1], 3)
+    # vertex needs it though
+    vertex_map = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, verts[faces]).view(image_size[0], image_size[1], 3)
+    return depth_map,normal_map, vertex_map

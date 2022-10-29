@@ -16,7 +16,7 @@ import torch
 from scipy.spatial import KDTree
 from numpy import linalg as la
 import time 
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth
 import numpy as np 
 from functorch import vmap, vjp, jacrev, jacfwd, hessian, jvp, grad
 from einops import rearrange, reduce, repeat
@@ -30,25 +30,7 @@ from pytorch3d.renderer import (
 )
 from pytorch3d.ops import interpolate_face_attributes
 
-def render_depth(R,t,K, verts, faces, raster_settings, image_size, device):
-    assert K.shape == (1,3,3), print(K.shape)
-    assert R.shape == (1,3,3), print(R.shape)
-    assert t.shape == (1,3), print(t, t.shape)
 
-    mesh = Meshes(verts=[verts.to(device)], faces=[faces.to(device)])
-    image_size_t = torch.tensor(image_size).view(1,2)
-    camera_torch = pytorch3d.utils.cameras_from_opencv_projection(R=R, tvec=t, camera_matrix=K, image_size=image_size_t)
-    mesh_raster = MeshRasterizer(cameras=camera_torch, raster_settings=raster_settings).to(device)
-    fragments = mesh_raster(mesh)
-    depth_map = fragments.zbuf[0].view(image_size).detach().cpu().numpy()
-    vertex_normals = mesh.verts_normals_packed()  # (V, 3)
-    faces_normals = vertex_normals[faces]
-    ones = torch.ones_like(fragments.bary_coords)
-    # normal map don't need interpolate bary coord
-    normal_map = interpolate_face_attributes(fragments.pix_to_face, ones, faces_normals).view(image_size[0], image_size[1], 3)
-    # vertex needs it though
-    vertex_map = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, verts[faces]).view(image_size[0], image_size[1], 3)
-    return depth_map,normal_map, vertex_map
 
 def test_render_depth():
     # run under cpu for stability

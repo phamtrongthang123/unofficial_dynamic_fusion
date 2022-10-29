@@ -38,9 +38,9 @@ def test_get_W():
         dw = [] 
         dv = []
         for id in idx:
-            dv.append(_nodes[i][0])
-            dq.append(_nodes[i][1])
-            dw.append(_nodes[i][3])
+            dv.append(_nodes[id][0])
+            dq.append(_nodes[id][1])
+            dw.append(_nodes[id][3])
         dqs.append(torch.stack(dq))
         dgw.append(torch.stack(dw))
         dgv.append(torch.stack(dv))
@@ -96,9 +96,9 @@ def test_GN_blendingW():
         dv = []
         print(idx)
         for id in idx:
-            dv.append(_nodes[i][0])
-            dq.append(_nodes[i][1])
-            dw.append(_nodes[i][3])
+            dv.append(_nodes[id][0])
+            dq.append(_nodes[id][1])
+            dw.append(_nodes[id][3])
         dqs.append(torch.stack(dq))
         dgw.append(torch.stack(dw))
         dgv.append(torch.stack(dv))
@@ -133,7 +133,7 @@ def test_GN_blendingW():
         # error is a number for each batch, so we only need to multiply it inside normally 
         b = torch.einsum('bkij,bj->bki', jT,fx.view(bs,1)).view(bs*knn,8,1) # [bs, knn,8, 1]
         solved_delta = solve_vmap(A, b) # [bs*knn,8,1]
-        dqs -=  0.2*solved_delta.view(dqs.shape) # set 0.2 here helps
+        dqs -=  0.3*solved_delta.view(dqs.shape) # set 0.2 here helps
         dqs = dqnorm_vmap(dqs.view(-1,8)).view(bs,knn,8)
         print("log: ", torch.sum(fx), torch.sum(solved_delta.abs()), torch.linalg.norm(A)) # if this decreases each time, then we are success, probably .-. 
     
@@ -141,6 +141,8 @@ def test_GN_blendingW():
         T = get_W(Xc[jj], Tlw, dqs[jj], dgw[jj], dgv[jj])
         R, t= decompose_se3(T)
         Xt =  (torch.einsum('bij,j->bi', R, Xc[jj]) + t.squeeze(-1)).squeeze()
+        print(jj)
+        print(dqs[jj])
         print(Xt)
         print(R)
         print(t)
