@@ -1,6 +1,5 @@
 trimesh
 einops
-functorch
+# functorch
 vedo
-transformations
-dq3d
+pytest

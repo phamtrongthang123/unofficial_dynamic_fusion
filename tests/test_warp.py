@@ -75,7 +75,7 @@ def test_GN_blendingW():
     _nodes = []  
     for j in range(len(nodes_v_t)):
         _nodes.append([nodes_v_t[j],
-                            torch.tensor([1, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]).float(), # real Tic = T_k-1
+                            torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.01]).float(), # real Tic = T_k-1
                             torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.01, 0.01, 0.0]).float(), # tmp T_k for optim
                             2 * _radius])
     _kdtree = KDTree(nodes_v_t)
