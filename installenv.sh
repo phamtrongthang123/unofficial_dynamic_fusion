@@ -11,5 +11,5 @@ conda install -y pytorch==1.12.0 torchvision==0.13.0 torchaudio==0.12.0 cudatool
 pip install functorch==0.2.0
 conda install -y -c fvcore -c iopath -c conda-forge fvcore iopath # need this to install pytorch3d
 conda install -y -c bottler nvidiacub
-conda install -y pytorch3d -c pytorch3d-nightly
+conda install -y pytorch3d -c pytorch3d
 python -c "import pytorch3d.utils; import functorch" # test calling
