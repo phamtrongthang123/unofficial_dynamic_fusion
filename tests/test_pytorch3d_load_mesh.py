@@ -1,10 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import os
-from skimage import measure
-from skimage.draw import ellipsoid
-import trimesh 
 import cv2 
 import torch
 import os, sys
@@ -13,13 +9,8 @@ import warnings
 warnings.simplefilter("ignore", UserWarning)
 import os
 import torch
-from scipy.spatial import KDTree
-from numpy import linalg as la
 import time 
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W
 import numpy as np 
-from functorch import vmap, vjp, jacrev, jacfwd, hessian, jvp, grad
-from einops import rearrange, reduce, repeat
 import pytorch3d
 import pytorch3d.utils
 from pytorch3d.io import IO, load_ply
@@ -28,6 +19,8 @@ from pytorch3d.renderer import (
     RasterizationSettings, BlendParams,
     MeshRenderer, MeshRasterizer, HardPhongShader
 )
+
+
 
 
 def test_runtime_and_sanity_load_mesh():
@@ -140,7 +133,6 @@ def test_runtime_and_sanity_load_mesh():
     # plt.show()
     a = 0
 
-
 def test_sanity_pytorch():
     device = "cuda"
     t1 = time.time()
@@ -153,3 +145,5 @@ def test_sanity_pytorch():
     a = a.to(device)
     t2 = time.time()
     print("convert time: ", t2 - t1) # 
+
+
