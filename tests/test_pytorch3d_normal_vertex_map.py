@@ -48,13 +48,9 @@ def test_render_depth():
     t = torch.tensor(out[2])
     t = (t[:3] / t[3])[:, 0].view(1,3).float()
     image_size = [480, 640]
-    raster_settings = RasterizationSettings(
-        image_size=image_size,
-        faces_per_pixel=1,
-        bin_size=None,
-    )
+
     # For qualitative testing, uncomment the lines below
-    depth_map, normal_map, vertex_map = render_depth(R,t,K,verts, faces, raster_settings, image_size, device)
+    depth_map, normal_map, vertex_map = render_depth(R,t,K,verts, faces, image_size, device)
     assert depth_map.shape == tuple(image_size)
     assert normal_map.shape == (480, 640, 3)
     assert vertex_map.shape == (480, 640, 3)

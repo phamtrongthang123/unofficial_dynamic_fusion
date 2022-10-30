@@ -78,15 +78,12 @@ def compose_se3(R,t):
 
 def robust_Tukey_penalty(value, c):
   # https://mathworld.wolfram.com/TukeysBiweight.html
-  if value.abs() > c: 
-    return torch.tensor(0.0) 
-  return value * (1- value**2 / c**2)**2
+    ae = torch.abs(value)
+    return torch.where(ae>c, 0.0, value * (1- value**2 / c**2)**2 ).type_as(value)
 
 def huber_penalty(value,c):
-    if value.abs() <= c:
-        return 0.5 * (value**2)
-    else:
-        return c * (value.abs() - 0.5*c)
+    ae = torch.abs(value)
+    return torch.where(ae<=c, 0.5 * (value**2), c * (ae - 0.5*c) ).type_as(value)
 
 def SE3(dq):
   # from https://www.cs.utah.edu/~ladislav/kavan07skinning/kavan07skinning.pdf
@@ -105,10 +102,10 @@ def SE3(dq):
   out.append(2*dq[:,2]*dq[:,3] + 2 *dq[:,0]*dq[:,1] )
   out.append(1-2*dq[:,1]**2 - 2*dq[:,2]**2 )
   out.append(2*(-dq[:,4]*dq[:,3] -dq[:,5]*dq[:,2] +dq[:,6]*dq[:,1] +dq[:,7]*dq[:,0]))
-  out.append(torch.tensor([0]))
-  out.append(torch.tensor([0]))
-  out.append(torch.tensor([0]))
-  out.append(torch.tensor([1]))
+  out.append(torch.tensor([0]).type_as(out[-1]))
+  out.append(torch.tensor([0]).type_as(out[-1]))
+  out.append(torch.tensor([0]).type_as(out[-1]))
+  out.append(torch.tensor([1]).type_as(out[-1]))
   return torch.cat(out).view(1,4,4)
 
 def SE3_novmap(dq):
@@ -142,9 +139,9 @@ def average_edge_dist_in_face( f, verts):
 
 
 def blending(Xc, dqs, dgw, dgv):
-    repxc = Xc.view(1, 3).repeat_interleave(dgv.shape[0],0)
+    repxc = Xc.view(1, 3).repeat_interleave(dgv.shape[0],0).type_as(dgv)
     assert repxc.shape == dgv.shape 
-    wixc = torch.exp(-torch.linalg.norm(dgv - repxc, dim=1)**2 / (2*torch.pow(dgw,2)))
+    wixc = torch.exp(-torch.linalg.norm(dgv - repxc, dim=1)**2 / (2*torch.pow(dgw,2))).float()
     assert wixc.shape == dgw.shape
     qkc = torch.einsum('i,ik->k',wixc,dqs)
     # qkc = dqs[0]+dqs[1]
@@ -168,17 +165,23 @@ def get_W(Xc, Tlw, dqs, dgw, dgv):
     return T 
 
 
-def render_depth(R,t,K, verts, faces, raster_settings, image_size, device):
+def render_depth(R,t,K, verts, faces, image_size, device):
     assert K.shape == (1,3,3), print(K.shape)
     assert R.shape == (1,3,3), print(R.shape)
     assert t.shape == (1,3), print(t, t.shape)
-
-    mesh = Meshes(verts=[verts.to(device)], faces=[faces.to(device)])
+    verts = verts.to(device)
+    faces = faces.to(device)
+    raster_settings = RasterizationSettings(
+        image_size=image_size,
+        faces_per_pixel=1,
+        bin_size=None,
+    )
+    mesh = Meshes(verts=[verts], faces=[faces])
     image_size_t = torch.tensor(image_size).view(1,2)
     camera_torch = pytorch3d.utils.cameras_from_opencv_projection(R=R, tvec=t, camera_matrix=K, image_size=image_size_t)
     mesh_raster = MeshRasterizer(cameras=camera_torch, raster_settings=raster_settings).to(device)
     fragments = mesh_raster(mesh)
-    depth_map = fragments.zbuf[0].view(image_size).detach().cpu().numpy()
+    depth_map = fragments.zbuf[0].view(image_size)
     vertex_normals = mesh.verts_normals_packed()  # (V, 3)
     faces_normals = vertex_normals[faces]
     ones = torch.ones_like(fragments.bary_coords)

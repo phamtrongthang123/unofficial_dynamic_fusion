@@ -98,10 +98,10 @@ class OurDataset(torch.utils.data.Dataset):
                 intrinsics[1, 2] *= img_scale
 
             self.c2w_all.append(c2w)
-            self.K_all.append(torch.from_numpy(intrinsics[:3, :3]))
+            self.K_all.append(torch.from_numpy(intrinsics[:3, :3]).float())
             self.rgb_all.append(torch.from_numpy(rgb))
             self.depth_all.append(torch.from_numpy(depth))
-            if i>0:break
+            if i==4:break
         print("Depth min: {:f}".format(np.array(d_min).min()))
         print("Depth max: {:f}".format(np.array(d_max).max()))
         self.n_images = len(self.rgb_all)

@@ -7,7 +7,7 @@ import open3d as o3d
 import imageio
 
 
-def integrate(
+def integrate_old(
         depth_im,
         cam_intr,
         cam_pose,
@@ -28,9 +28,7 @@ def integrate(
     # Convert camera coordinates to pixel coordinates
     fx, fy = cam_intr[0, 0], cam_intr[1, 1]
     cx, cy = cam_intr[0, 2], cam_intr[1, 2]
-    print('cam_intr', cam_intr)
     pix_z = cam_c[:, 2]
-    print('cam_c', cam_c, cam_c.shape)
     # project all the voxels back to image plane
     pix_x = torch.round((cam_c[:, 0] * fx / cam_c[:, 2]) + cx).long()  # [nx*ny*nz]
     pix_y = torch.round((cam_c[:, 1] * fy / cam_c[:, 2]) + cy).long()  # [nx*ny*nz]
@@ -63,7 +61,60 @@ def integrate(
         color_vol[valid_vox_x, valid_vox_y, valid_vox_z, :] = (w_old[:, None] * old_color + obs_weight * new_color) / w_new[:, None]
 
     return weight_vol, tsdf_vol, color_vol
+def integrate(
+        depth_im,
+        cam_intr,
+        cam_pose,
+        obs_weight,
+        world_c,  # world coordinates grid [nx*ny*nz, 4]
+        vox_coords,  # voxel coordinates grid [nx*ny*nz, 3]
+        weight_vol,  # weight volume [nx, ny, nz]
+        tsdf_vol,  # tsdf volume [nx, ny, nz]
+        sdf_trunc,
+        im_h,
+        im_w,
+        color_vol=None,
+        color_im=None,
+):
 
+    world2cam = torch.inverse(cam_pose)
+    cam_c = torch.matmul(world2cam, world_c.transpose(1, 0)).transpose(1, 0).float()  # [nx*ny*nz, 4]
+    # Convert camera coordinates to pixel coordinates
+    fx, fy = cam_intr[0, 0], cam_intr[1, 1]
+    cx, cy = cam_intr[0, 2], cam_intr[1, 2]
+    pix_z = cam_c[:, 2]
+    # project all the voxels back to image plane
+    pix_x = torch.round((cam_c[:, 0] * fx / cam_c[:, 2]) + cx).long()  # [nx*ny*nz]
+    pix_y = torch.round((cam_c[:, 1] * fy / cam_c[:, 2]) + cy).long()  # [nx*ny*nz]
+
+    # Eliminate pixels outside view frustum
+    valid_pix = (pix_x >= 0) & (pix_x < im_w) & (pix_y >= 0) & (pix_y < im_h) & (pix_z > 0)  # [n_valid]
+    valid_vox_x = vox_coords[valid_pix, 0]
+    valid_vox_y = vox_coords[valid_pix, 1]
+    valid_vox_z = vox_coords[valid_pix, 2]
+    depth_val = depth_im[pix_y[valid_pix], pix_x[valid_pix]]  # [n_valid]
+
+    # Integrate tsdf
+    depth_diff = depth_val - pix_z[valid_pix]
+    dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+    valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)  # all points 1. inside frustum 2. with valid depth 3. outside -truncate_dist
+    valid_vox_x = valid_vox_x[valid_pts]
+    valid_vox_y = valid_vox_y[valid_pts]
+    valid_vox_z = valid_vox_z[valid_pts]
+    valid_dist = dist[valid_pts]
+    w_old = weight_vol[valid_vox_x, valid_vox_y, valid_vox_z]
+    tsdf_vals = tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z]
+    w_new = w_old + obs_weight
+    tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z] = (w_old * tsdf_vals + obs_weight * valid_dist) / w_new
+    weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = w_new
+
+    if color_vol is not None and color_im is not None:
+        old_color = color_vol[valid_vox_x, valid_vox_y, valid_vox_z]
+        new_color = color_im[pix_y[valid_pix], pix_x[valid_pix]]
+        new_color = new_color[valid_pts]
+        color_vol[valid_vox_x, valid_vox_y, valid_vox_z, :] = (w_old[:, None] * old_color + obs_weight * new_color) / w_new[:, None]
+
+    return weight_vol, tsdf_vol, color_vol
 
 class TSDFVolumeTorch:
     """
@@ -169,7 +220,7 @@ class TSDFVolumeTorch:
     def get_volume(self):
         return self.tsdf_vol, self.weight_vol, self.color_vol
 
-    def get_mesh(self):
+    def get_mesh(self, istorch=False):
         """Compute a mesh from the voxel volume using marching cubes.
         """
         tsdf_vol, weight_vol, color_vol = self.get_volume()
@@ -181,7 +232,10 @@ class TSDFVolumeTorch:
             rgb_vals = color_vol[verts_ind[:, 0], verts_ind[:, 1], verts_ind[:, 2]].cpu().numpy()
             return verts, faces, norms, rgb_vals.astype(np.uint8)
         else:
-            return verts, faces, norms
+            if not istorch:
+                return verts, faces, norms
+            else:
+                return torch.tensor(verts.copy()).float(), torch.tensor(faces.copy()).long(), torch.tensor(norms.copy())
 
     def to_o3d_mesh(self):
         """Convert to o3d mesh object for visualization

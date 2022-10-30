@@ -25,7 +25,7 @@ class ICP(nn.Module):
         :param depth0: template depth image (0)
         :param depth1: depth image (1)
         :param K: intrinsic matric
-        :return: refined 0-to-1 transformation pose10
+        :return: refined 0-to-1 transformation pose10, note that it is from c2w, so you need to inverse if you want to manipulate vertices from get_mesh()
         """
         # create vertex and normal for current frame
         vertex0 = compute_vertex(depth0, K)

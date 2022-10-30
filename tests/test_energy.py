@@ -21,7 +21,7 @@ def test_energy_small():
     dgse = []  
     dgw = []
     for j in range(len(dgv)):
-        dgse.append(torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.01]).float())
+        dgse.append(torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 1e-8, 1e-8, 0.00]).float())
         dgw.append(torch.tensor(2.0*_radius))
     dgse = torch.stack(dgse)
     dgw = torch.stack(dgw)
@@ -57,13 +57,14 @@ def test_energy_small():
     compute_batch_jacobian = vmap(jacrev(energy, argnums=4, has_aux=True), in_dims=(0, 0, None,None,None,None, 0))
     solve_vmap = vmap(solve_,in_dims=(0,0))
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
-    lmda = 1e-6
-    for i in range(5):
+    I = torch.eye(8).type_as(Tlw)
+    lmda = 1e-9
+    for i in range(10):
         jse3,fx = compute_batch_jacobian(Xc, target, Tlw, dgv, dgse, dgw, node_to_nn) 
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8], each result is scalar so the shape is the same as dgse. Note that we need to keep 1 there because pytorch squeezed out our scalar from fx.
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
         tmp_A = torch.einsum('bnij,bnjl->bnil',jT, j) # [bs,n_node,8,8]
-        A = (tmp_A + lmda*get_diag(tmp_A)).view(bs*len(dgv),8,8)  #  [bs*n_node,8,8]
+        A = (tmp_A + lmda*I.view(1,1,8,8)).view(bs*len(dgv),8,8)  #  [bs*n_node,8,8]
         # error is a number for each batch, so we only need to multiply it inside normally 
         b = torch.einsum('bnij,bj->bni', jT,fx.view(bs,1)).view(bs*len(dgv),8,1) # [bs*n_node, 8, 1]
         solved_delta = solve_vmap(A, b).view(bs,len(dgv),8).sum(dim=0) # [bs*n_node,8,1]
