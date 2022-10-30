@@ -153,12 +153,13 @@ class DynFu():
                 # update Tlw 
 
             # fusion
-            self.tsdf_volume.integrate(depth0,
-                                K,
-                                Tlw,
-                                obs_weight=1.,
-                                color_img=color0
-                                )
+            if i ==0:
+                self.tsdf_volume.integrate(depth0,
+                                    K,
+                                    Tlw,
+                                    obs_weight=1.,
+                                    color_img=color0
+                                    )
             
             t1 = get_time()
             t += [t1 - t0]
@@ -170,7 +171,7 @@ class DynFu():
             else:
                 # self.update_graph() function 
                 pass
-            if i == 4: break
+            if i == 40: break
         avg_time = np.array(t).mean()
         print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
         # compute tracking ATE
