@@ -42,16 +42,28 @@ def warp_to_live_frame(verts, Tlw, dgv, dgse, dgw,  kdtree):
     assert len(verts_live.shape) == 2 and verts_live.shape[1] == 3
     return verts_live
 
+
+
 def data_term(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn):
     Xc = gt_Xc[2]
     nc = gt_Xc[3]
     gt_v = gt_Xc[0]
     gt_n = gt_Xc[1]
     Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
-    e = gt_n.dot(Xt - gt_v).view(1,1)
-    # re = e
-    re = robust_Tukey_penalty(e, 0.01)
+    # if you want it to similar to surfel warp, uncomment the lines below
+    e = gt_n.dot(Xt - gt_v).view(1,1)**2
+    re = e
+    # or using tukey like in DynFu paper.
+    # e = gt_n.dot(Xt - gt_v).view(1,1)
+    # re = robust_Tukey_penalty(e, 0.01)
+    return re
+
+def energy(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn):
+    data_vmap = vmap(data_term, in_dims=(0, None, None, None, None, 0))
+    re = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
     return re, re
+
+# def reg_term(dgv_i, dgse_i, dgw_i, Tlw, dgv, dgse, dgw, node_to_nn):
 
 
 def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, kdtree, K):
@@ -75,14 +87,14 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     res = torch.stack(res)
     assert len(res.shape) == 3 # filtered_dim, 4, 3 
     assert len(node_to_nn.shape) == 2 # filtered_dim, 4 
-    bs = res.shape[0]
-    vmap_data_jac = vmap(jacrev(data_term, argnums=3, has_aux=True), in_dims=(0, None, None, None, None, 0))
+    energy_jac = jacrev(energy, argnums=3, has_aux=True)
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw) # to counter not full rank
+    bs = 1 # res.shape[0]
     lmda = 1e-4
     for i in range(5):
-        jse3,fx = vmap_data_jac(res, Tlw, dgv, dgse, dgw, node_to_nn)
+        jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn)
         # print("done se3")
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8]
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
