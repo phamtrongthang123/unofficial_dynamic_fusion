@@ -177,14 +177,16 @@ class DynFu():
             poses_gt += [pose_gt.cpu().numpy()]
             if i == 0:
                 self.construct_graph()
+                print(f"Done, now we have {self.dgv.shape[0]} nodes!")
             else:
                 print("Start update graph!")
                 try:
                     self.update_graph(Tlw)
+                    print(f"Done, now we have {self.dgv.shape[0]} nodes!")
                 except Exception as e:
                     print(f'Failed to update graph because of {e}! ') 
                 # pass
-            if i == 400: break
+            if i == 420: break
         avg_time = np.array(t).mean()
         print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
         # compute tracking ATE
