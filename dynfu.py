@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import cv2
 import trimesh
+import warnings
+warnings.simplefilter("ignore", UserWarning)
 from matplotlib import pyplot as plt
 from fusion import TSDFVolumeTorch
 from dataset.ourdataset import OurDataset
@@ -55,6 +57,7 @@ def energy(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn):
     data_val = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
     reg_val = reg_term(Tlw, dgv, dgse, dgw, dgv_nn)
     re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
+    # re = data_val
     return re, re
 
 
@@ -77,7 +80,7 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
                 node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
                 res.append(torch.stack([vertex0[y,x], normal0[y,x], vertex_map[y,x], normal_map[y,x]]))
     node_to_nn = torch.stack(node_to_nn)
-    dists, idx = kdtree.query(dgv.cpu(), k=knn, workers=-1)
+    dists, idx = kdtree.query(dgv.cpu(), k=range(2,2+knn), workers=-1)
     dgv_nn = torch.tensor(idx).type_as(dgv).long()
     res = torch.stack(res)
     assert len(res.shape) == 3 # filtered_dim, 4, 3 
@@ -251,7 +254,9 @@ class DynFu():
             assert dgse_nn.shape == (4,8)
             assert dgv_nn.shape == (4,3)
             T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
-            re_dq = SE3_dq(T.view(4,4))
+            print(T)
+            re_dq = dqnorm(SE3_dq(T.view(4,4)))
+            print(re_dq)
             return re_dq.view(8)
         get_se3_helper_vmap = vmap(get_se3_helper, in_dims=(0, None, None, None, None, 0))
         nodes_v, nodes_idx = uniform_sample(verts_c[mask_unsupported].cpu(), self._radius)

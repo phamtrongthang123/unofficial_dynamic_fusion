@@ -9,6 +9,7 @@ from functorch import vmap, jacrev
 def quat_from_rot(_rot):
     tr = _rot[0,0] + _rot[1,1] + _rot[2,2]
     ifhere = torch.stack((tr>0, torch.logical_and(_rot[0,0] > _rot[1,1],_rot[0,0] > _rot[2,2]), _rot[1,1] > _rot[2,2], torch.tensor(True))).long().view(-1)
+    print(ifhere)
     s = torch.sqrt(tr + 1.0) * 2
     tmp1 = []
     tmp1.append(s*0.25)
@@ -34,7 +35,12 @@ def quat_from_rot(_rot):
     y = (_rot[1,2] + _rot[2,1]) / s
     z = 0.25*s
     re = torch.cat((re,torch.stack((w,x,y,z)).view(1,4)), dim=0)
-    ree = torch.matmul((torch.logical_and(ifhere, torch.cumsum(ifhere, dim = 0) == 1)).float(), re)
+    re_withoutinf = torch.where(torch.isinf(re), torch.tensor([1,0,0,0]).type_as(_rot), re)
+    re_withoutnan = torch.where(torch.isnan(re_withoutinf), torch.tensor([1,0,0,0]).type_as(_rot), re_withoutinf)
+    print(re_withoutnan)
+    ree = torch.matmul((torch.logical_and(ifhere, torch.cumsum(ifhere, dim = 0) == 1)).float(), re_withoutnan)
+    print(re[3] * 0)
+    print(ree)
     return ree
 
 def quat_add(q0, q1):
@@ -72,22 +78,39 @@ def mat34(dq):
     return torch.cat((torch.cat((r,t.view(3,1)), dim=1), torch.tensor([0,0,0,1]).view(1,4)), dim = 0)
 
 dqq = torch.randn(8)
-a = mat34(dqnorm(dqq)).view(4,4)
-dq = SE3_dq(a)
-_a = mat34(dq)
-dq = SE3_dq(_a)
-_a1 = mat34(dq)
+# a = mat34(dqnorm(dqq)).view(4,4)
+# dq = SE3_dq(a)
+# _a = mat34(dq)
+# dq = SE3_dq(_a)
+# _a1 = mat34(dq)
 # assert torch.allclose(_a1, _a), f'{_a1, _a}'
-for i in range(10):
-    print(_a)
-    print(dq)
-    dq = SE3_dq(_a)
-    _a = SE3(dq).view(4,4)
+# for i in range(10):
+#     print(_a)
+#     print(dq)
+#     dq = SE3_dq(_a)
+#     _a = SE3(dq).view(4,4)
 
 
 R = torch.randn(10,3,3)
 vmapp = vmap(quat_from_rot, in_dims=0)
 aa = vmapp(R)
 
-nodes_w = torch.tensor(2.0).view(1,1).repeat_interleave(a.shape[0], 0).view(-1)
-print(nodes_w.shape)
+# nodes_w = torch.tensor(2.0).view(1,1).repeat_interleave(a.shape[0], 0).view(-1)
+# print(nodes_w.shape)
+# print(torch.sqrt(torch.tensor(-1)))
+
+# a = torch.randn(4,8)
+# a[1] = a[1]/0 
+# b = torch.where(torch.isinf(a), -11, torch.tensor([1,0,0,0,0,0,0,0]))
+# print(b)
+
+
+b = torch.tensor([[ 9.9971e-01, -6.6122e-05,  2.4009e-02, -3.4403e-02],
+              [ 2.3128e-04,  9.9998e-01, -6.8816e-03,  3.5100e-03],
+              [-2.4008e-02,  6.8852e-03,  9.9969e-01,  2.2866e-03],
+              [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
+b = torch.tensor([[ 9.9981e-01, -3.1563e-04,  1.9341e-02, -2.8007e-02],
+              [ 4.4879e-04,  9.9998e-01, -6.8874e-03,  3.4571e-03],
+              [-1.9339e-02,  6.8948e-03,  9.9979e-01,  1.5284e-03],
+              [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
+print(quat_from_rot(b))
