@@ -59,16 +59,11 @@ def integrate_dynamic(
     dist = torch.where(depth_diff > sdf_trunc, sdf_trunc, depth_diff)
     print("Get wx")
     knn = 4
-    # wx = []
     t1 = time.time()
     dists, idx = kdtree.query(world_c.cpu(), k=knn, workers=-1)
     wx_nn = dgv[torch.tensor(idx).long()]
     wc = world_c.view(-1, 1, 3).repeat_interleave(4,1)
     wx = torch.mean(torch.linalg.norm(wx_nn - wc, dim = 2), dim=1).float()
-    # for i in range(world_c.shape[0]):
-    #     nn = dgv[idx]
-    #     wx.append(torch.mean(torch.linalg.norm(nn - world_c[i], dim=1)))
-    # wx = torch.stack(wx).float()
     wx = wx.view(weight_vol.shape)
     print("Done wx", time.time() - t1)
     # assert wx.shape == world_c.shape
@@ -83,11 +78,8 @@ def integrate_dynamic(
     w_new = w_old + wx_valid
 
     tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z] = ((w_old * tsdf_vals + valid_dist * wx_valid ) / w_new).float()
-    try:
-        weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = torch.where(w_new > wx_valid.max(), wx_valid.max(), w_new).float()
-    except Exception as e:
-        weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = w_new 
-        print(f"Got error {e} so only assigned w = w_new! Some info about wx_valid {wx_valid.shape} and {wx_valid}!")
+    wmax= 1.0
+    weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = torch.where(w_new > wmax, wmax, w_new).float()
     print("Done fusing")
     if color_vol is not None and color_im is not None:
         old_color = color_vol[valid_vox_x, valid_vox_y, valid_vox_z]

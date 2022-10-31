@@ -14,7 +14,7 @@ from scipy.spatial import KDTree
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 from tmp_utils import cal_dist, uniform_sample
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame, plot_vis_depthmap
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame, plot_vis_depthmap, SE3_dq
 import time 
 from functorch import vmap, jacrev
 from icp import compute_normal, compute_vertex
@@ -87,7 +87,7 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw) # to counter not full rank
     bs = 1 # res.shape[0]
-    lmda = 5
+    lmda = 1
     for i in range(5):
         jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
         # print("done se3")
@@ -178,9 +178,13 @@ class DynFu():
             if i == 0:
                 self.construct_graph()
             else:
-                # self.update_graph() function 
-                pass
-            if i == 4: break
+                print("Start update graph!")
+                try:
+                    self.update_graph(Tlw)
+                except Exception as e:
+                    print(f'Failed to update graph because of {e}! ') 
+                # pass
+            if i == 400: break
         avg_time = np.array(t).mean()
         print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
         # compute tracking ATE
@@ -203,31 +207,15 @@ class DynFu():
         partial_tsdf.export(os.path.join(args.save_dir, "mesh.obj"))
         np.savez(os.path.join(args.save_dir, "traj.npz"), poses=self.poses)
         np.savez(os.path.join(args.save_dir, "traj_gt.npz"), poses=self.poses_gt)
-        color0, depth0, pose_gt, K = self.dataset[0]
-        verts, faces, norms = self.tsdf_volume.get_mesh(istorch=True)
-        # warp vertices to live frame 
-        Tlw = torch.tensor(self.poses[-1])
-        verts = warp_to_live_frame(verts, Tlw, self.dgv.cpu(), self.dgse.cpu(), self.dgw.cpu(),  self._kdtree)
-        # render depth, vertex and normal 
-        H, W = self.dataset.H, self.dataset.W
-        image_size = [H,W]
-        Tlw = Tlw.to(self.device)
-        depth_map, normal_map, vertex_map = render_depth(Tlw[:3,:3].view(1,3,3),Tlw[:3,3].view(1,3),K.view(1,3,3),verts, faces, image_size, self.device)      
-        import matplotlib.pyplot as plt
-        plt.figure()
-        plt.imshow(depth_map.detach().cpu()) # (h,w)
-        plt.colorbar(label='Distance to Camera')
-        plt.title('Depth image')
-        plt.xlabel('X Pixel')
-        plt.ylabel('Y Pixel')
-        plt.show()
+
 
     def construct_graph(self):
         verts, faces, norms = self.tsdf_volume.get_mesh()
-        average_distances = []
-        for f in faces:
-            average_distances.append(average_edge_dist_in_face(f, verts))
-        self._radius = self.subsample_rate * np.average(np.array(average_distances))
+        # average_distances = []
+        # for f in faces:
+        #     average_distances.append(average_edge_dist_in_face(f, verts))
+        # self._radius = self.subsample_rate * np.average(np.array(average_distances))
+        self._radius = 0.01 # the paper said e = 0.01 in experiment
         # print(verts.shape, faces.shape, self._radius)
         self._vertices = verts 
         self._faces = faces
@@ -244,6 +232,42 @@ class DynFu():
 
         # construct kd tree
         self._kdtree = KDTree(nodes_v.astype(np.float32))
+    def update_graph(self, Tlw):
+        verts_c, faces, norms = self.tsdf_volume.get_mesh()
+        dists, idx = self._kdtree.query(verts_c, k=4, workers=-1)
+        verts_c = torch.tensor(verts_c).to(self.device)
+        verts_c_nn_idx = torch.tensor(idx).long()
+        verts_c_nn = self.dgv[verts_c_nn_idx]
+        verts_c_nn_dgw = self.dgw[verts_c_nn_idx]
+        verts_c_rep = verts_c.view(-1,1,3).repeat_interleave(4,dim=1)
+        verts_c_l2_dgw = torch.linalg.norm(verts_c_nn - verts_c_rep, dim=2) / verts_c_nn_dgw
+        mask_unsupported = torch.min(verts_c_l2_dgw, dim = 1).values >= 1
+        def get_se3_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn):
+            dgv_nn = dgv[node_to_nn]
+            dgw_nn = dgw[node_to_nn]
+            dgse_nn = dgse[node_to_nn]
+            assert dgse_nn.shape == (4,8)
+            assert dgv_nn.shape == (4,3)
+            T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
+            re_dq = SE3_dq(T.view(4,4))
+            return re_dq.view(8)
+        get_se3_helper_vmap = vmap(get_se3_helper, in_dims=(0, None, None, None, None, 0))
+        nodes_v, nodes_idx = uniform_sample(verts_c[mask_unsupported].cpu(), self._radius)
+        dists, idx = self._kdtree.query(nodes_v, k=4, workers=-1)
+        nodes_v = torch.tensor(nodes_v).to(self.device)
+        nodes_v_nn_idx = torch.tensor(idx).long().to(self.device)
+        nodes_se3 = get_se3_helper_vmap(nodes_v, Tlw, self.dgv, self.dgse, self.dgw, nodes_v_nn_idx).float().to(self.device)
+        assert nodes_se3.shape[0] == nodes_v.shape[0]
+        nodes_w = torch.tensor(2.0*self._radius).view(1,1).repeat_interleave(nodes_v.shape[0], 0).to(self.device).view(-1)
+
+        self.dgv = torch.cat((self.dgv,nodes_v), dim = 0).to(self.device)
+        self.dgse = torch.cat((self.dgse,nodes_se3), dim = 0).to(self.device)
+        self.dgw = torch.cat((self.dgw,nodes_w), dim = 0).float().to(self.device)
+        assert self.dgv.shape[0] == self.dgw.shape[0] and self.dgv.shape[0] == self.dgse.shape[0], f'{self.dgv.shape, self.dgw.shape, self.dgse.shape, nodes_w.shape, nodes_v.shape}'
+
+        # construct kd tree
+        self._kdtree = KDTree(self.dgv.cpu())
+        # pass
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # standard configs
