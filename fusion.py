@@ -6,7 +6,7 @@ import cv2
 import open3d as o3d
 import imageio
 from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame
-
+import time
 
 def integrate_dynamic(
         depth_im,
@@ -59,7 +59,8 @@ def integrate_dynamic(
     dist = torch.where(depth_diff > sdf_trunc, sdf_trunc, depth_diff)
     print("Get wx")
     knn = 4
-    wx = []
+    # wx = []
+    t1 = time.time()
     dists, idx = kdtree.query(world_c.cpu(), k=knn, workers=-1)
     wx_nn = dgv[torch.tensor(idx).long()]
     wc = world_c.view(-1, 1, 3).repeat_interleave(4,1)
@@ -69,7 +70,7 @@ def integrate_dynamic(
     #     wx.append(torch.mean(torch.linalg.norm(nn - world_c[i], dim=1)))
     # wx = torch.stack(wx).float()
     wx = wx.view(weight_vol.shape)
-    print("Done wx")
+    print("Done wx", time.time() - t1)
     # assert wx.shape == world_c.shape
     valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)  # all points 1. inside frustum 2. with valid depth 3. outside -truncate_dist
     valid_vox_x = valid_vox_x[valid_pts]
@@ -82,7 +83,11 @@ def integrate_dynamic(
     w_new = w_old + wx_valid
 
     tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z] = ((w_old * tsdf_vals + valid_dist * wx_valid ) / w_new).float()
-    weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = torch.where(w_new > wx_valid.max(), wx_valid.max(), w_new).float()
+    try:
+        weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = torch.where(w_new > wx_valid.max(), wx_valid.max(), w_new).float()
+    except Exception as e:
+        weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = w_new 
+        print(f"Got error {e} so only assigned w = w_new! Some info about wx_valid {wx_valid.shape} and {wx_valid}!")
     print("Done fusing")
     if color_vol is not None and color_im is not None:
         old_color = color_vol[valid_vox_x, valid_vox_y, valid_vox_z]
