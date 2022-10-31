@@ -14,33 +14,10 @@ from scipy.spatial import KDTree
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 from tmp_utils import cal_dist, uniform_sample
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame, plot_vis_depthmap
 import time 
 from functorch import vmap, jacrev
 from icp import compute_normal, compute_vertex
-def warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn):
-    dgv_nn = dgv[node_to_nn]
-    dgw_nn = dgw[node_to_nn]
-    dgse_nn = dgse[node_to_nn]
-    assert dgse_nn.shape == (4,8)
-    assert dgv_nn.shape == (4,3)
-    T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
-    R, t= decompose_se3(T.type_as(Xc))
-    Xt =  (torch.einsum('bij,bjk->bi', R, Xc.view(1,3,1)) + t.squeeze(-1)).squeeze() # shape [3] == target
-    
-    return Xt 
-def warp_to_live_frame(verts, Tlw, dgv, dgse, dgw,  kdtree): 
-    assert len(verts.shape) == 2 and verts.shape[1] == 3 
-    knn = 4
-    node_to_nn = []
-    for i in range(verts.shape[0]):
-        dists, idx = kdtree.query(verts[i], k=knn)
-        node_to_nn.append(torch.tensor(idx))
-    node_to_nn = torch.stack(node_to_nn)
-    vmap_helper = vmap(warp_helper, in_dims=(0, None,None,None,None, 0))
-    verts_live = vmap_helper(verts, Tlw, dgv, dgse, dgw, node_to_nn)
-    assert len(verts_live.shape) == 2 and verts_live.shape[1] == 3
-    return verts_live
 
 
 
@@ -58,12 +35,28 @@ def data_term(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn):
     # re = robust_Tukey_penalty(e, 0.01)
     return re
 
-def energy(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn):
+
+def reg_term(Tlw, dgv, dgse, dgw, dgv_nn):
+    shape = dgv.shape
+    warp_helper_vmap = vmap(warp_helper, in_dims=(0, None, None, None, None, 0))
+    dgv_warped = warp_helper_vmap(dgv, Tlw, dgv, dgse, dgw, dgv_nn)
+    dgv_nn_t = dgv_warped[dgv_nn]
+    assert dgv_nn_t.shape == (shape[0], 4,3)
+    dgv_warped_t = dgv_warped.view(-1, 1, 3).repeat_interleave(4,1)
+    el2 = torch.linalg.norm(dgv_warped_t - dgv_nn_t, dim = 2)**2  
+    assert el2.shape == (shape[0], 4) 
+    ssel2 = el2.mean()
+    return ssel2  
+
+
+
+def energy(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn):
     data_vmap = vmap(data_term, in_dims=(0, None, None, None, None, 0))
-    re = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
+    data_val = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
+    reg_val = reg_term(Tlw, dgv, dgse, dgw, dgv_nn)
+    re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
     return re, re
 
-# def reg_term(dgv_i, dgse_i, dgw_i, Tlw, dgv, dgse, dgw, node_to_nn):
 
 
 def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, kdtree, K):
@@ -80,10 +73,12 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     for y in range(H): 
         for x in range(W):
             if mask0[y,x] and mask_hat[y,x]:
-                dists, idx = kdtree.query(vertex_map[y,x].cpu(), k=knn)
+                dists, idx = kdtree.query(vertex_map[y,x].cpu(), k=knn, workers=-1)
                 node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
                 res.append(torch.stack([vertex0[y,x], normal0[y,x], vertex_map[y,x], normal_map[y,x]]))
     node_to_nn = torch.stack(node_to_nn)
+    dists, idx = kdtree.query(dgv.cpu(), k=knn, workers=-1)
+    dgv_nn = torch.tensor(idx).type_as(dgv).long()
     res = torch.stack(res)
     assert len(res.shape) == 3 # filtered_dim, 4, 3 
     assert len(node_to_nn.shape) == 2 # filtered_dim, 4 
@@ -92,9 +87,9 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw) # to counter not full rank
     bs = 1 # res.shape[0]
-    lmda = 1e-4
+    lmda = 5
     for i in range(5):
-        jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn)
+        jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
         # print("done se3")
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8]
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
@@ -136,14 +131,19 @@ class DynFu():
                 Tlw_i = torch.inverse(Tlw).to(self.device)
                 verts, faces, norms = self.tsdf_volume.get_mesh(istorch=True)
                 partial_tsdf = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=norms)
-                partial_tsdf.export(os.path.join(args.save_dir, f"mesh{i}.ply"))
+                partial_tsdf.export(os.path.join(args.save_dir, f"mesh_{str(i).zfill(6)}.obj"))
                 # warp vertices to live frame 
                 verts = warp_to_live_frame(verts, Tlw_i, self.dgv, self.dgse, self.dgw,  self._kdtree)
                 partial_tsdf = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=norms)
-                partial_tsdf.export(os.path.join(args.save_dir, f"mesh{i}_warped.ply"))
+                partial_tsdf.export(os.path.join(args.save_dir, f"warped_mesh_{str(i).zfill(6)}.obj"))
                 # render depth, vertex and normal 
                 image_size = [H,W]
-                depth_map, normal_map, vertex_map = render_depth(Tlw_i[:3,:3].view(1,3,3),Tlw_i[:3,3].view(1,3),K.view(1,3,3),verts, faces, image_size, self.device)      
+                # we already use Tlw_i in warping, so no need of passing it into rendering function
+                pose_tmp = torch.eye(4).to(self.device)
+                depth_map, normal_map, vertex_map = render_depth(pose_tmp[:3,:3].view(1,3,3),pose_tmp[:3,3].view(1,3),K.view(1,3,3),verts, faces, image_size, self.device) 
+
+                plot_vis_depthmap(depth_map, f'{args.save_dir}/vis', i)
+
                 T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
                 Tlw = Tlw @ T10
                 Tlw_i = torch.inverse(Tlw).to(self.device)
@@ -160,7 +160,16 @@ class DynFu():
                                     obs_weight=1.,
                                     color_img=color0
                                     )
-            
+            else:
+                self.tsdf_volume.integrate_dynamic(depth0, 
+                                    self.dgv,
+                                    self.dgse,
+                                    self.dgw,
+                                    self._kdtree,
+                                    K,
+                                    Tlw,
+                                    obs_weight=1.,
+                                    color_img=color0)
             t1 = get_time()
             t += [t1 - t0]
             print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
@@ -171,7 +180,7 @@ class DynFu():
             else:
                 # self.update_graph() function 
                 pass
-            if i == 40: break
+            if i == 4: break
         avg_time = np.array(t).mean()
         print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
         # compute tracking ATE
@@ -191,7 +200,7 @@ class DynFu():
         else:
             verts, faces, norms = self.tsdf_volume.get_mesh()
             partial_tsdf = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=norms)
-        partial_tsdf.export(os.path.join(args.save_dir, "mesh.ply"))
+        partial_tsdf.export(os.path.join(args.save_dir, "mesh.obj"))
         np.savez(os.path.join(args.save_dir, "traj.npz"), poses=self.poses)
         np.savez(os.path.join(args.save_dir, "traj_gt.npz"), poses=self.poses_gt)
         color0, depth0, pose_gt, K = self.dataset[0]
@@ -234,7 +243,7 @@ class DynFu():
         self.dgw = torch.stack(dgw).float().to(self.device)
 
         # construct kd tree
-        self._kdtree = KDTree(nodes_v)
+        self._kdtree = KDTree(nodes_v.astype(np.float32))
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # standard configs

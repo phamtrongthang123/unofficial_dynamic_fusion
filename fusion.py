@@ -5,10 +5,15 @@ import torch
 import cv2
 import open3d as o3d
 import imageio
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame
 
 
-def integrate_old(
+def integrate_dynamic(
         depth_im,
+        dgv,
+        dgse,
+        dgw,
+        kdtree,
         cam_intr,
         cam_pose,
         obs_weight,
@@ -22,19 +27,27 @@ def integrate_old(
         color_vol=None,
         color_im=None,
 ):
-
+    print("Start integrate!", world_c.shape)
+    world_c = world_c[:,:3]
     world2cam = torch.inverse(cam_pose)
-    cam_c = torch.matmul(world2cam, world_c.transpose(1, 0)).transpose(1, 0).float()  # [nx*ny*nz, 4]
+    # warp the model first 
+    world_c_warped = warp_to_live_frame(world_c.cpu(), world2cam, dgv, dgse, dgw,  kdtree, device="cuda")
+    # assert world_c_warped.shape == world_c.shape
+    # convert to pixel and start if else-ing    
+    # cam_c = torch.matmul(world2cam, world_c.transpose(1, 0)).transpose(1, 0).float()  # [nx*ny*nz, 4]
+    
     # Convert camera coordinates to pixel coordinates
+    cam_intr = cam_intr.cuda()
     fx, fy = cam_intr[0, 0], cam_intr[1, 1]
     cx, cy = cam_intr[0, 2], cam_intr[1, 2]
-    pix_z = cam_c[:, 2]
+    pix_z = world_c_warped[:, 2]
     # project all the voxels back to image plane
-    pix_x = torch.round((cam_c[:, 0] * fx / cam_c[:, 2]) + cx).long()  # [nx*ny*nz]
-    pix_y = torch.round((cam_c[:, 1] * fy / cam_c[:, 2]) + cy).long()  # [nx*ny*nz]
+    pix_x = torch.round((world_c_warped[:, 0] * fx / world_c_warped[:, 2]) + cx).long()  # [nx*ny*nz]
+    pix_y = torch.round((world_c_warped[:, 1] * fy / world_c_warped[:, 2]) + cy).long()  # [nx*ny*nz]
 
     # Eliminate pixels outside view frustum
     valid_pix = (pix_x >= 0) & (pix_x < im_w) & (pix_y >= 0) & (pix_y < im_h) & (pix_z > 0)  # [n_valid]
+    # note that we still keep the orders here, so the mask will signals which index is good to go.
     valid_vox_x = vox_coords[valid_pix, 0]
     valid_vox_y = vox_coords[valid_pix, 1]
     valid_vox_z = vox_coords[valid_pix, 2]
@@ -42,7 +55,22 @@ def integrate_old(
 
     # Integrate tsdf
     depth_diff = depth_val - pix_z[valid_pix]
-    dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+    # dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+    dist = torch.where(depth_diff > sdf_trunc, sdf_trunc, depth_diff)
+    print("Get wx")
+    knn = 4
+    wx = []
+    dists, idx = kdtree.query(world_c.cpu(), k=knn, workers=-1)
+    wx_nn = dgv[torch.tensor(idx).long()]
+    wc = world_c.view(-1, 1, 3).repeat_interleave(4,1)
+    wx = torch.mean(torch.linalg.norm(wx_nn - wc, dim = 2), dim=1).float()
+    # for i in range(world_c.shape[0]):
+    #     nn = dgv[idx]
+    #     wx.append(torch.mean(torch.linalg.norm(nn - world_c[i], dim=1)))
+    # wx = torch.stack(wx).float()
+    wx = wx.view(weight_vol.shape)
+    print("Done wx")
+    # assert wx.shape == world_c.shape
     valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)  # all points 1. inside frustum 2. with valid depth 3. outside -truncate_dist
     valid_vox_x = valid_vox_x[valid_pts]
     valid_vox_y = valid_vox_y[valid_pts]
@@ -50,10 +78,12 @@ def integrate_old(
     valid_dist = dist[valid_pts]
     w_old = weight_vol[valid_vox_x, valid_vox_y, valid_vox_z]
     tsdf_vals = tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z]
-    w_new = w_old + obs_weight
-    tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z] = (w_old * tsdf_vals + obs_weight * valid_dist) / w_new
-    weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = w_new
+    wx_valid = wx[valid_vox_x, valid_vox_y, valid_vox_z]
+    w_new = w_old + wx_valid
 
+    tsdf_vol[valid_vox_x, valid_vox_y, valid_vox_z] = ((w_old * tsdf_vals + valid_dist * wx_valid ) / w_new).float()
+    weight_vol[valid_vox_x, valid_vox_y, valid_vox_z] = torch.where(w_new > wx_valid.max(), wx_valid.max(), w_new).float()
+    print("Done fusing")
     if color_vol is not None and color_im is not None:
         old_color = color_vol[valid_vox_x, valid_vox_y, valid_vox_z]
         new_color = color_im[pix_y[valid_pix], pix_x[valid_pix]]
@@ -134,6 +164,7 @@ class TSDFVolumeTorch:
         self.voxel_size = float(voxel_size)
         self.sdf_trunc = margin * self.voxel_size
         self.integrate_func = integrate
+        self.integrate_func_dynamic = integrate_dynamic
         self.fuse_color = fuse_color
 
         # Adjust volume bounds
@@ -179,6 +210,47 @@ class TSDFVolumeTorch:
         if isinstance(data, np.ndarray):
             data = torch.from_numpy(data)
         return data.float().to(self.device)
+
+    @torch.no_grad()
+    def integrate_dynamic(self, depth_im, dgv, dgse, dgw, kdtree, cam_intr, cam_pose, obs_weight, color_img=None):
+        """Integrate an RGB-D frame into the TSDF volume.
+        Args:
+        depth_im (torch.Tensor): A depth image of shape (H, W).
+        cam_intr (torch.Tensor): The camera intrinsics matrix of shape (3, 3).
+        cam_pose (torch.Tensor): The camera pose (i.e. extrinsics) of shape (4, 4). T_wc
+        obs_weight (float): The weight to assign to the current observation.
+        """
+
+        cam_pose = self.data_transfer(cam_pose)
+        cam_intr = self.data_transfer(cam_intr)
+        depth_im = self.data_transfer(depth_im)
+        if color_img is not None:
+            color_img = self.data_transfer(color_img)
+        else:
+            color_img = None
+        im_h, im_w = depth_im.shape
+        # fuse
+        weight_vol, tsdf_vol, color_vol = self.integrate_func_dynamic(
+            depth_im,
+            dgv, 
+            dgse, 
+            dgw, 
+            kdtree,
+            cam_intr,
+            cam_pose,
+            obs_weight,
+            self.world_c,
+            self.vox_coords,
+            self.weight_vol,
+            self.tsdf_vol,
+            self.sdf_trunc,
+            im_h, im_w,
+            self.color_vol,
+            color_img,
+        )
+        self.weight_vol = weight_vol
+        self.tsdf_vol = tsdf_vol
+        self.color_vol = color_vol
 
     @torch.no_grad()
     def integrate(self, depth_im, cam_intr, cam_pose, obs_weight, color_img=None):

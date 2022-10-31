@@ -13,6 +13,9 @@ from pytorch3d.renderer import (
     MeshRenderer, MeshRasterizer, HardPhongShader
 )
 from pytorch3d.ops import interpolate_face_attributes
+from functorch import vmap, jacrev
+import time 
+
 
 # Radius-based spatial subsampling
 def uniform_sample(arr,radius):
@@ -190,3 +193,43 @@ def render_depth(R,t,K, verts, faces, image_size, device):
     # vertex needs it though
     vertex_map = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, verts[faces]).view(image_size[0], image_size[1], 3)
     return depth_map,normal_map, vertex_map
+
+
+def warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn):
+    dgv_nn = dgv[node_to_nn]
+    dgw_nn = dgw[node_to_nn]
+    dgse_nn = dgse[node_to_nn]
+    assert dgse_nn.shape == (4,8)
+    assert dgv_nn.shape == (4,3)
+    T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
+    R, t= decompose_se3(T.type_as(Xc))
+    Xt =  (torch.einsum('bij,bjk->bi', R, Xc.view(1,3,1)) + t.squeeze(-1)).squeeze() # shape [3] == target
+    
+    return Xt 
+def warp_to_live_frame(verts, Tlw, dgv, dgse, dgw,  kdtree, device="cpu"): 
+    assert len(verts.shape) == 2 and verts.shape[1] == 3 
+    knn = 4
+    t1 = time.time()
+    dists, idx = kdtree.query(verts, k=knn, workers=-1)
+    node_to_nn = torch.tensor(idx).to(device).long()
+    t2 = time.time()
+    print("find neighbor cost: ", t2-t1)
+    verts = verts.to(device)
+    Tlw, dgv, dgse, dgw = Tlw.to(device), dgv.to(device), dgse.to(device), dgw.to(device)
+    vmap_helper = vmap(warp_helper, in_dims=(0, None,None,None,None, 0))
+    verts_live = vmap_helper(verts, Tlw, dgv, dgse, dgw, node_to_nn)
+    print("warping cost: ", time.time() - t2)
+    assert len(verts_live.shape) == 2 and verts_live.shape[1] == 3
+    return verts_live.to(device)
+
+import matplotlib.pyplot as plt
+import os 
+def plot_vis_depthmap(depth_map, vis_dir, i):
+    os.makedirs(vis_dir,exist_ok=True)
+    plt.figure()
+    plt.imshow(depth_map.detach().cpu()) # (h,w)
+    plt.colorbar(label='Distance to Camera')
+    plt.title('Depth image')
+    plt.xlabel('X Pixel')
+    plt.ylabel('Y Pixel')
+    plt.savefig(f'{vis_dir}/{str(i).zfill(6)}.jpg')

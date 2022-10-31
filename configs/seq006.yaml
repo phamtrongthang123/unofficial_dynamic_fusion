@@ -5,8 +5,8 @@ far: 1.5
 # depth /= 1000.  # I take our unit is 1 meter, so /1000 to make it go back to 1m
 # invalid = (depth < near) | (depth > far)
 # depth[invalid] = -1.
-vol_bounds: [-0.5, 1.0, -0.7, 0.7, -0.2, 2.0] # x1,x2,y1,y2,z1,z2
-voxel_size: 0.01
+vol_bounds: [-0.5, 1.0, -0.7, 0.7, -0.01, 1.51] # x1,x2,y1,y2,z1,z2
+voxel_size: 0.02
 # def get_volume_setting(args):
 #     voxel_size = args.voxel_size
 #     vol_bnds = np.array(args.vol_bounds).reshape(3, 2)
