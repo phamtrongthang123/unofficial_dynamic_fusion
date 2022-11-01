@@ -267,8 +267,8 @@ def quat_from_rot(_rot):
     z = 0.25*s
     re = torch.cat((re,torch.stack((w,x,y,z)).view(1,4)), dim=0).type_as(_rot)
     # I must write it this way so vmap can accept it as "if else", can't do re[ifhere] anyway.
-    re_withoutinf = torch.where(torch.isinf(re), torch.tensor([1,0,0,0]).type_as(_rot), re)
-    re_withoutnan = torch.where(torch.isnan(re_withoutinf), torch.tensor([1,0,0,0]).type_as(_rot), re_withoutinf)
+    re_withoutinf = torch.where(torch.any(torch.isinf(re), dim = 1).view(-1,1), torch.tensor([1,0,0,0]).type_as(_rot), re)
+    re_withoutnan = torch.where(torch.any(torch.isnan(re_withoutinf), dim = 1).view(-1,1), torch.tensor([1,0,0,0]).type_as(_rot), re_withoutinf)
     ree = torch.matmul((torch.logical_and(ifhere, torch.cumsum(ifhere, dim = 0) == 1)).float(), re_withoutnan)
     return ree
 

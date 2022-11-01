@@ -35,8 +35,9 @@ def quat_from_rot(_rot):
     y = (_rot[1,2] + _rot[2,1]) / s
     z = 0.25*s
     re = torch.cat((re,torch.stack((w,x,y,z)).view(1,4)), dim=0)
-    re_withoutinf = torch.where(torch.isinf(re), torch.tensor([1,0,0,0]).type_as(_rot), re)
-    re_withoutnan = torch.where(torch.isnan(re_withoutinf), torch.tensor([1,0,0,0]).type_as(_rot), re_withoutinf)
+    print(torch.any(torch.isinf(re), dim = 1))
+    re_withoutinf = torch.where(torch.any(torch.isinf(re), dim = 1).view(-1,1), torch.tensor([1,0,0,1]).type_as(_rot), re)
+    re_withoutnan = torch.where(torch.any(torch.isnan(re_withoutinf), dim = 1).view(-1,1), torch.tensor([1,0,0,1]).type_as(_rot), re_withoutinf)
     print(re_withoutnan)
     ree = torch.matmul((torch.logical_and(ifhere, torch.cumsum(ifhere, dim = 0) == 1)).float(), re_withoutnan)
     print(re[3] * 0)
@@ -114,3 +115,9 @@ b = torch.tensor([[ 9.9981e-01, -3.1563e-04,  1.9341e-02, -2.8007e-02],
               [-1.9339e-02,  6.8948e-03,  9.9979e-01,  1.5284e-03],
               [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
 print(quat_from_rot(b))
+
+
+a = torch.tensor([[1,2,3], [0,0,0], [4,5,6]]).float()
+print(torch.where((torch.mean(a, dim = 1) ==0).view(-1,1), a+ 10*torch.tensor([1.0,0.0,0.0]), a + torch.mean(a, dim=1).view(-1,1)), torch.mean(a, dim=(0,1)))
+b = torch.randn(2,1,1)
+print( b* torch.eye(8).view(1,8,8), b)

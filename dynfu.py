@@ -90,18 +90,27 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw) # to counter not full rank
     bs = 1 # res.shape[0]
-    lmda = 1
+    lmda = 5
     for i in range(5):
         jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
         # print("done se3")
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8]
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
-        tmp_A = torch.einsum('bnij,bnjl->bnil',jT, j) # [bs,n_node,8,8]
-        A = (tmp_A + lmda*I.view(1,1,8,8)).view(bs*len(dgv),8,8)  #  [bs*n_node,8,8]
+        tmp_A = torch.einsum('bnij,bnjl->bnil',jT, j).view(bs*len(dgv),8,8) # [bs*n_node,8,8]
+        # if matrix is full of 0 then add lambda * I to make it full rank with solution = 0
+        # else we take the mean of abs value as the unit for regularization       
+        A = torch.where((torch.mean(torch.abs(tmp_A), dim=(1,2)) == 0).view(-1,1,1), 
+                        lmda*I.view(1,8,8), 
+                        tmp_A + lmda*torch.mean(torch.abs(tmp_A), dim=(1,2)).view(bs*len(dgv), 1,1)*I.view(1,8,8)).view(bs*len(dgv),8,8) 
+        print(A)
         b = torch.einsum('bnij,bj->bni', jT,fx.view(bs,1)).view(bs*len(dgv),8,1) # [bs*n_node, 8, 1]
         solved_delta = torch.linalg.lstsq(A, b)
         solved_delta = solved_delta.solution.view(bs,len(dgv),8).mean(dim=0) 
-        dgse -=  solved_delta.view(dgse.shape) # set 0.2 here helps
+        # eliminate nan and inf 
+        solved_delta = torch.where(torch.any(torch.isnan(solved_delta.view(dgse.shape))).view(-1,1), torch.zeros(8).type_as(dgse), solved_delta.view(dgse.shape))
+        solved_delta = torch.where(torch.any(torch.isinf(solved_delta.view(dgse.shape))).view(-1,1), torch.zeros(8).type_as(dgse), solved_delta.view(dgse.shape))
+        # update 
+        dgse -=  solved_delta
         dgse = dqnorm_vmap(dgse.view(-1,8)).view(len(dgv),8)
         print("log: ", torch.sum(fx), torch.sum(fx.abs()), torch.mean(fx), torch.mean(fx.abs()))
     return dgse
