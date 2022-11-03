@@ -2,11 +2,11 @@ import numpy as np
 import os 
 from pathlib import Path 
 import shutil
-seq006 = '/home/ptthang/data_mount/KinectFusion/seq006'
-outdir = Path(seq006)/'processed'
-intrinsic_txt = os.path.join(seq006, 'intrinsics.txt')
-depth_original = Path(seq006)/'depth'
-color_original = Path(seq006)/'color'
+seq003 = '/home/ptthang/data_mount/KinectFusion/seq003'
+outdir = Path(seq003)/'processed'
+intrinsic_txt = os.path.join(seq003, 'intrinsics.txt')
+depth_original = Path(seq003)/'depth'
+color_original = Path(seq003)/'color'
 def get_calib(path:str) -> np.ndarray:
     strs = open(path).read().split()
     return np.array([[strs[0], strs[1], strs[2], strs[3]], [strs[4], strs[5], strs[6], strs[7]],

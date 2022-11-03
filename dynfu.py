@@ -56,8 +56,8 @@ def energy(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn):
     data_vmap = vmap(data_term, in_dims=(0, None, None, None, None, 0))
     data_val = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
     reg_val = reg_term(Tlw, dgv, dgse, dgw, dgv_nn)
-    re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
-    # re = data_val
+    # re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
+    re = data_val
     return re, re
 
 
@@ -96,13 +96,8 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
         # print("done se3")
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8]
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
-        tmp_A = torch.einsum('bnij,bnjl->bnil',jT, j).view(bs*len(dgv),8,8) # [bs*n_node,8,8]
-        # if matrix is full of 0 then add lambda * I to make it full rank with solution = 0
-        # else we take the mean of abs value as the unit for regularization       
-        A = torch.where((torch.mean(torch.abs(tmp_A), dim=(1,2)) == 0).view(-1,1,1), 
-                        lmda*I.view(1,8,8), 
-                        tmp_A + lmda*torch.mean(torch.abs(tmp_A), dim=(1,2)).view(bs*len(dgv), 1,1)*I.view(1,8,8)).view(bs*len(dgv),8,8) 
-        print(A)
+        tmp_A = torch.einsum('bnij,bnjl->bnil',jT, j).view(bs*len(dgv),8,8) # [bs*n_node,8,8]    
+        A = (tmp_A + lmda*I.view(1,1,8,8)).view(bs*len(dgv),8,8)  #  [bs*n_node,8,8]
         b = torch.einsum('bnij,bj->bni', jT,fx.view(bs,1)).view(bs*len(dgv),8,1) # [bs*n_node, 8, 1]
         solved_delta = torch.linalg.lstsq(A, b)
         solved_delta = solved_delta.solution.view(bs,len(dgv),8).mean(dim=0) 
@@ -172,16 +167,16 @@ class DynFu():
                                     obs_weight=1.,
                                     color_img=color0
                                     )
-            else:
-                self.tsdf_volume.integrate_dynamic(depth0, 
-                                    self.dgv,
-                                    self.dgse,
-                                    self.dgw,
-                                    self._kdtree,
-                                    K,
-                                    Tlw,
-                                    obs_weight=1.,
-                                    color_img=color0)
+            # else:
+            #     self.tsdf_volume.integrate_dynamic(depth0, 
+            #                         self.dgv,
+            #                         self.dgse,
+            #                         self.dgw,
+            #                         self._kdtree,
+            #                         K,
+            #                         Tlw,
+            #                         obs_weight=1.,
+            #                         color_img=color0)
             t1 = get_time()
             t += [t1 - t0]
             print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
@@ -193,7 +188,7 @@ class DynFu():
             else:
                 print("Start update graph!")
                 try:
-                    self.update_graph(Tlw)
+                    # self.update_graph(Tlw)
                     print(f"Done, now we have {self.dgv.shape[0]} nodes!")
                 except Exception as e:
                     print(f'Failed to update graph because of {e}! ') 
@@ -290,6 +285,7 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default="configs/fr1_desk.yaml", help='Path to config file.')
     parser.add_argument("--save_dir", type=str, default=None, help="Directory of saving results.")
     args = load_config(parser.parse_args())
+    os.makedirs(args.save_dir, exist_ok=True)
     dynfu = DynFu(args)
     dynfu.process()    
     if args.save_dir is not None:
