@@ -151,8 +151,8 @@ class DynFu():
 
                 plot_vis_depthmap(depth_map, f'{args.save_dir}/vis', i)
 
-                T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
-                Tlw = Tlw @ T10
+                # T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
+                # Tlw = Tlw @ T10
                 Tlw_i = torch.inverse(Tlw).to(self.device)
                 # optim energy and set dgse 
                 self.dgse = optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw_i, self.dgv, self.dgse, self.dgw, self._kdtree, K)
