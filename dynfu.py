@@ -90,9 +90,9 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw) # to counter not full rank
     bs = 1 # res.shape[0]
-    lmda = 5
-    for i in range(5):
+    for i in range(10):
         jse3,fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
+        lmda = torch.mean(jse3.abs())
         # print("done se3")
         j = jse3.view(bs, len(dgv),1,8) # [bs,n_node,1,8]
         jT = custom_transpose_batch(j,isknn=True) # [bs,n_node, 8,1]
@@ -107,7 +107,7 @@ def optim_energy(depth0, depth_map, normal_map, vertex_map,Tlw, dgv, dgse, dgw, 
         # update 
         dgse -=  solved_delta
         dgse = dqnorm_vmap(dgse.view(-1,8)).view(len(dgv),8)
-        print("log: ", torch.sum(fx), torch.sum(fx.abs()), torch.mean(fx), torch.mean(fx.abs()))
+        print("log: ", torch.sum(fx), torch.min(jse3[jse3.abs()>0].abs()), torch.mean(jse3), torch.mean(jse3.abs()))
     return dgse
 
 class DynFu():
@@ -224,7 +224,7 @@ class DynFu():
         # for f in faces:
         #     average_distances.append(average_edge_dist_in_face(f, verts))
         # self._radius = self.subsample_rate * np.average(np.array(average_distances))
-        self._radius = 0.01 # the paper said e = 0.01 in experiment
+        self._radius = 0.025 # the paper said e = 0.01 in experiment
         # print(verts.shape, faces.shape, self._radius)
         self._vertices = verts 
         self._faces = faces
@@ -235,7 +235,7 @@ class DynFu():
         dgw = []
         for j in range(len(self.dgv)):
             dgse.append(torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]).float())
-            dgw.append(torch.tensor(2.0*self._radius))
+            dgw.append(torch.tensor(3.0*self._radius))
         self.dgse = torch.stack(dgse).to(self.device)
         self.dgw = torch.stack(dgw).float().to(self.device)
 

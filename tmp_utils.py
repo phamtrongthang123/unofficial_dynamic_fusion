@@ -15,7 +15,8 @@ from pytorch3d.renderer import (
 from pytorch3d.ops import interpolate_face_attributes
 from functorch import vmap, jacrev
 import time 
-
+import matplotlib.pyplot as plt
+import os 
 
 # Radius-based spatial subsampling
 def uniform_sample(arr,radius):
@@ -222,8 +223,7 @@ def warp_to_live_frame(verts, Tlw, dgv, dgse, dgw,  kdtree, device="cpu"):
     assert len(verts_live.shape) == 2 and verts_live.shape[1] == 3
     return verts_live.to(device)
 
-import matplotlib.pyplot as plt
-import os 
+
 def plot_vis_depthmap(depth_map, vis_dir, i):
     os.makedirs(vis_dir,exist_ok=True)
     plt.figure()
@@ -233,6 +233,7 @@ def plot_vis_depthmap(depth_map, vis_dir, i):
     plt.xlabel('X Pixel')
     plt.ylabel('Y Pixel')
     plt.savefig(f'{vis_dir}/{str(i).zfill(6)}.jpg')
+    plt.close()
 
 
 
