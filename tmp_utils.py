@@ -222,13 +222,13 @@ def blending(
     wixc = torch.exp(
         -torch.linalg.norm(dgv - repxc, dim=1) ** 2 / (2 * torch.pow(dgw, 2))
     ).float()
+    # ze = torch.tensor(0.0).type_as(wixc_)
+    # wixc = torch.where(torch.isclose(wixc_, ze, atol=0.5),ze,wixc_ )
     assert wixc.shape == dgw.shape
     qkc = torch.einsum("i,ik->k", wixc, dqs)
-    # qkc = dqs[0]+dqs[1]
+
     assert qkc.shape[0] == 8 and len(qkc.shape) == 1
-    # dem = torch.linalg.norm(qkc[:4])
     out = dqnorm(qkc)
-    # print(out)
     return out
 
 

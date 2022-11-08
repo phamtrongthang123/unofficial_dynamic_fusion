@@ -57,7 +57,7 @@ def data_term(
     gt_n = gt_Xc[1]
     Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
     # if you want it to similar to surfel warp, uncomment the lines below
-    e = gt_n.dot(Xt - gt_v).view(1, 1) ** 2 # + 0.1 * torch.linalg.norm(Xt - gt_v) ** 2
+    e = gt_n.dot(gt_v - Xt).view(1, 1) ** 2 # + 0.1 * torch.linalg.norm(Xt - gt_v) ** 2
     re = e
     # or using tukey like in DynFu paper.
     # e = gt_n.dot(Xt - gt_v).view(1,1)
@@ -88,20 +88,19 @@ def reg_term(
         torch.tensor:           : Shape (1).    Return the scalar result from the mentioned Eq.
     """
     shape = dgv.shape
+    knn = dgv_nn.shape[1]
     # self warp
     warp_helper_vmap = vmap(warp_helper, in_dims=(0, None, None, None, None, 0))
     dgv_warped = warp_helper_vmap(dgv, Tlw, dgv, dgse, dgw, dgv_nn)
 
     # self wapr with neighbors' se3
-    dgv_nn_nn = dgv_nn[dgv_nn].view(-1, 4)
-    dgv_rep = dgv.view(-1, 1, 3).repeat_interleave(4, 1).view(-1, 3)
+    dgv_nn_nn = dgv_nn[dgv_nn].view(-1, knn)
+    dgv_rep = dgv.view(-1, 1, 3).repeat_interleave(knn, 1).view(-1, 3)
     dgv_nn_warp = warp_helper_vmap(dgv_rep, Tlw, dgv, dgse, dgw, dgv_nn_nn).view(
-        -1, 4, 3
+        -1, knn, 3
     )
-    dgv_warped_rep = dgv_warped.view(-1, 1, 3).repeat_interleave(4, 1)
-    assert dgv_warped_rep.shape == (shape[0], 4, 3)
+    dgv_warped_rep = dgv_warped.view(-1, 1, 3).repeat_interleave(knn, 1)
     el2 = torch.linalg.norm(dgv_nn_warp - dgv_warped_rep, dim=2) ** 2
-    assert el2.shape == (shape[0], 4)
     ssel2 = el2.mean()
     return ssel2
 
@@ -167,7 +166,7 @@ def optim_energy(
     Returns:
         torch.tensor: _description_
     """
-    knn = 4
+    knn = 3
     vertex0 = compute_vertex(depth0, K)
     normal0 = compute_normal(vertex0)
     mask0 = depth0 > 0.0
@@ -203,9 +202,9 @@ def optim_energy(
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw)  # to counter not full rank
     bs = 1  # res.shape[0]
-    for i in range(15):
+    for i in range(5):
         jse3, fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
-        lmda = torch.mean(jse3[jse3 > 0])
+        lmda = torch.mean(jse3.abs()) 
         # print("done se3")
         j = jse3.view(bs, len(dgv), 1, 8)  # [bs,n_node,1,8]
         jT = custom_transpose_batch(j, isknn=True)  # [bs,n_node, 8,1]
@@ -233,13 +232,13 @@ def optim_energy(
             solved_delta.view(dgse.shape),
         )
         # update
-        dgse -=  0.5*solved_delta
+        dgse -=  solved_delta
         dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
         print(
             "log: ",
             torch.sum(fx),
             lmda,
-            torch.min(jse3[jse3.abs() > 0].abs()),
+            # torch.min(jse3[jse3.abs() > 0].abs()),
             torch.mean(jse3),
             torch.mean(jse3.abs()),
         )
@@ -257,7 +256,7 @@ class DynFu:
         """        
         self.subsample_rate = 5.0
         self.args = args
-        self.knn = 4
+        self.knn = 3
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # device = torch.device("cpu")
         self.dataset = OurDataset(

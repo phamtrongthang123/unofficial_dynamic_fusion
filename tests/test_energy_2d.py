@@ -15,15 +15,16 @@ import plotly.graph_objects as go
 import plotly.figure_factory as ff
 from typing import List, Set, Dict, Tuple, Optional, Union, Any
 
-def plot_xc_xt_nt(Xc, Xt, nt, vis_dir: str, step: int) -> None:
+def plot_xc_xt_nt(Xc, Xt, nt, volume_live, vis_dir: str, step: int) -> None:
     os.makedirs(vis_dir, exist_ok=True)
     fig = ff.create_quiver(Xt[:,0], Xt[:,1], nt[:,0], nt[:,1],
-                        scale=1.,
-                        arrow_scale=.2,
+                        scale=0.025*1.,
+                        arrow_scale=.2*0.025,
                         name='quiver',
                         line_width=1)
     fig.add_trace(go.Scatter(x=Xc[:,0], y=Xc[:,1], mode='markers+lines'))
     fig.add_trace(go.Scatter(x=Xt[:,0], y=Xt[:,1], mode='markers+lines'))
+    fig.add_trace(go.Scatter(x=volume_live[:,0], y=volume_live[:,1], mode='markers'))
     fig.update_yaxes(
         scaleanchor = "x",
         scaleratio = 1,
@@ -60,7 +61,7 @@ def init_dgse_dgw(dgv: torch.tensor, _radius: torch.tensor) -> Tuple[torch.tenso
     dgw = []
     for j in range(len(dgv)):
         dgse.append(torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]).float())
-        dgw.append(torch.tensor(2.0*_radius))
+        dgw.append(torch.tensor(3.0*_radius))
     dgse = torch.stack(dgse)
     dgw = torch.stack(dgw)
     return dgse, dgw
@@ -78,40 +79,7 @@ def solve_(A: torch.tensor,b: torch.tensor) -> torch.tensor:
     res = solved_delta.solution 
     return res
 
-def data_term(
-    gt_Xc: torch.tensor,
-    Tlw: torch.tensor,
-    dgv: torch.tensor,
-    dgse: torch.tensor,
-    dgw: torch.tensor,
-    node_to_nn: torch.tensor,
-) -> torch.tensor:
-    """_summary_
 
-    Args:
-        gt_Xc (torch.tensor): _description_
-        Tlw (torch.tensor): _description_
-        dgv (torch.tensor): _description_
-        dgse (torch.tensor): _description_
-        dgw (torch.tensor): _description_
-        node_to_nn (torch.tensor): _description_
-
-    Returns:
-        torch.tensor: _description_
-    """
-    Xc = gt_Xc[2]
-    nc = gt_Xc[3]
-    gt_v = gt_Xc[0]
-    gt_n = gt_Xc[1]
-    Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
-    # if you want it to similar to surfel warp, uncomment the lines below
-    alpha = 0.5
-    e = alpha * gt_n.dot(Xt - gt_v).view(1, 1)   + (1-alpha)*torch.linalg.norm(Xt - gt_v) 
-    re = robust_Tukey_penalty(e, torch.tensor(99))
-    # or using tukey like in DynFu paper.
-    # e = gt_n.dot(Xt - gt_v).view(1,1)
-    # re = robust_Tukey_penalty(e, 0.01)
-    return re
 
 
 def reg_term(
@@ -184,7 +152,6 @@ def energy(
     re = data_val
     return re, re
 
-
 def post_process_solved_delta(solved_delta: Any, bs: int, dgv: torch.tensor, dgse: torch.tensor) -> torch.tensor:
     solved_delta = solved_delta.solution.view(bs, len(dgv), 8).mean(dim=0)
     # eliminate nan and inf
@@ -199,21 +166,59 @@ def post_process_solved_delta(solved_delta: Any, bs: int, dgv: torch.tensor, dgs
         solved_delta.view(dgse.shape),
     )
     return solved_delta
+
+def data_term(
+    gt_Xc: torch.tensor,
+    Tlw: torch.tensor,
+    dgv: torch.tensor,
+    dgse: torch.tensor,
+    dgw: torch.tensor,
+    node_to_nn: torch.tensor,
+) -> torch.tensor:
+    """_summary_
+
+    Args:
+        gt_Xc (torch.tensor): _description_
+        Tlw (torch.tensor): _description_
+        dgv (torch.tensor): _description_
+        dgse (torch.tensor): _description_
+        dgw (torch.tensor): _description_
+        node_to_nn (torch.tensor): _description_
+
+    Returns:
+        torch.tensor: _description_
+    """
+    Xc = gt_Xc[2]
+    nc = gt_Xc[3]
+    gt_v = gt_Xc[0]
+    gt_n = gt_Xc[1]
+    Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
+    # if you want it to similar to surfel warp, uncomment the lines below
+    alpha = 1.0
+    e = alpha * gt_n.dot(gt_v - Xt).view(1, 1)**2   + (1-alpha)*torch.linalg.norm(Xt - gt_v) 
+    re = e
+    # or using tukey like in DynFu paper.
+    # e = gt_n.dot(Xt - gt_v).view(1,1)
+    # re = robust_Tukey_penalty(e, torch.tensor(0.01))
+    return re
+
 def test_energy_2d():
     _ = torch.manual_seed(0)
 
     ## ============== INPUT ==============
     ### Constants
-    knn = 4
-    _radius = torch.tensor(1)
+    knn = 3
+    _radius = torch.tensor(0.025)
     ### Our inputs
     Xc = torch.tensor([[0,i,0] for i in range(1,6)]).flip(dims=(0,)).float()
+    # Xc[:,0]=4.5
+    Xc = Xc*_radius
     nc = torch.zeros_like(Xc)
-    nc[0,:] = 1
+    nc[:,0] = 1
     nc = nc.float()
-    Xt1 = torch.tensor([[3,5,0], [4,4,0], [4.5,3,0], [4.5,2,0], [4.5,1,0]]).float()
+    Xt1 = torch.tensor([[3,5,0], [4,4,0], [4.5,3,0], [4.5,2,0], [4.5,1,0]]).float()*_radius
     nt1 = cat_z0(produce_2d_normal_rightside(Xt1[:,:2]))
-    Xt2 = torch.tensor([[3,5,0], [5,4,0], [4,3,0], [5,2,0], [3,1,0]]).float()
+    Xt2 = torch.tensor([[3,5,0], [5,4,0], [4,3,0], [5,2,0], [3,1,0]]).float()*_radius
     nt2 = cat_z0(produce_2d_normal_rightside(Xt2[:,:2]))
     xc_gt = torch.stack([Xt1, nt1, Xc,nc], dim=1)
 
@@ -226,6 +231,14 @@ def test_energy_2d():
     node_to_nn = make_node_nn(Xc, _kdtree, knn)
     assert node_to_nn.shape == (5,knn)
 
+    ## fields
+    xv, yv = torch.meshgrid(
+    torch.arange(0, 10),
+    torch.arange(0, 10),
+    )
+    vox_coords = torch.stack([xv.flatten(), yv.flatten(), torch.zeros_like(xv.flatten())], dim=1).float()
+    vox_coords = vox_coords*_radius
+    volume_node_to_nn =  make_node_nn(vox_coords, _kdtree, knn)
 
     ## ============== PROCESS ==============
     # use vmap to avoid linear combination in batch dimension 
@@ -236,7 +249,7 @@ def test_energy_2d():
     I = torch.eye(8).type_as(Tlw)  # to counter not full rank
     bs = 1  # res.shape[0]
     # let's plot before learning
-    plot_xc_xt_nt(Xc,Xt1, nt1, vis_dir=f"tests/vis_learning", step=999)
+    plot_xc_xt_nt(Xc,Xt1, nt1,vox_coords, vis_dir=f"tests/vis_learning", step=999)
     for i in range(50):
         jse3, fx = energy_jac(xc_gt, Tlw, dgv, dgse, dgw, node_to_nn, node_to_nn)
         lmda = torch.mean(jse3.abs()) 
@@ -257,10 +270,13 @@ def test_energy_2d():
         solved_delta = torch.linalg.lstsq(A, b)
         solved_delta = post_process_solved_delta(solved_delta, bs, dgv, dgse)
         # update
-        dgse -= 0.5*solved_delta
+        dgse -= solved_delta
+        # dgse -= 0.05*jse3
         dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
+        plot_heatmap_step(dgse.view(1,-1,8),vis_dir=f"tests/vis_dgse",index=0,step=i)
         Xc_warp = warp_for_me_please(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
-        plot_xc_xt_nt(Xc_warp,Xt1, nt1, vis_dir=f"tests/vis_learning", step=i)
+        vox_coords_live = warp_for_me_please(vox_coords, Tlw, dgv, dgse, dgw, volume_node_to_nn)
+        plot_xc_xt_nt(Xc_warp,Xt1, nt1,vox_coords_live, vis_dir=f"tests/vis_learning", step=i)
         print(
             "log: ",
             torch.sum(fx),
@@ -272,7 +288,7 @@ def test_energy_2d():
 
 
     ## ============== ASSERT the output ==============
-    for jj in range(bs):
+    for jj in range(5):
         dgv_nn = dgv[node_to_nn[jj]]
         dgw_nn = dgw[node_to_nn[jj]]
         dgse_nn = dgse[node_to_nn[jj]]
