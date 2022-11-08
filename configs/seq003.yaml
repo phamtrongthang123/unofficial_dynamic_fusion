@@ -1,7 +1,7 @@
 data_root: "/home/ptthang/data_mount/KinectFusion/seq003"
 # data_type: "fr1"
 near: 0.1
-far: 1.0
+far: 0.95
 # depth /= 1000.  # I take our unit is 1 meter, so /1000 to make it go back to 1m
 # invalid = (depth < near) | (depth > far)
 # depth[invalid] = -1.

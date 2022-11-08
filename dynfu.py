@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import trimesh
 import warnings
+from functools import partial 
 
 warnings.simplefilter("ignore", UserWarning)
 from fusion import TSDFVolumeTorch
@@ -21,6 +22,7 @@ from tmp_utils import (
     warp_to_live_frame,
     plot_vis_depthmap,
     SE3_dq,
+    plot_heatmap_step,
 )
 import time
 from functorch import vmap, jacrev
@@ -55,7 +57,7 @@ def data_term(
     gt_n = gt_Xc[1]
     Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
     # if you want it to similar to surfel warp, uncomment the lines below
-    e = gt_n.dot(Xt - gt_v).view(1, 1) ** 2 + 0.1 * torch.linalg.norm(Xt - gt_v) ** 2
+    e = gt_n.dot(Xt - gt_v).view(1, 1) ** 2 # + 0.1 * torch.linalg.norm(Xt - gt_v) ** 2
     re = e
     # or using tukey like in DynFu paper.
     # e = gt_n.dot(Xt - gt_v).view(1,1)
@@ -146,6 +148,7 @@ def optim_energy(
     dgw: torch.tensor,
     kdtree: Any,
     K: torch.tensor,
+    plot_heatmap_: Any
 ) -> torch.tensor:
     """_summary_
 
@@ -209,6 +212,7 @@ def optim_energy(
         tmp_A = torch.einsum("bnij,bnjl->bnil", jT, j).view(
             bs * len(dgv), 8, 8
         )  # [bs*n_node,8,8]
+        plot_heatmap_(a=tmp_A.view(-1,8,8), step=i)
         A = (tmp_A + lmda * I.view(1, 1, 8, 8)).view(
             bs * len(dgv), 8, 8
         )  #  [bs*n_node,8,8]
@@ -229,7 +233,7 @@ def optim_energy(
             solved_delta.view(dgse.shape),
         )
         # update
-        dgse -= 0.5 * solved_delta
+        dgse -=  0.5*solved_delta
         dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
         print(
             "log: ",
@@ -328,6 +332,7 @@ class DynFu:
                 # Tlw = Tlw @ T10
                 Tlw_i = torch.inverse(Tlw).to(self.device)
                 # optim energy and set dgse
+                plot_heatmap_step_ = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_heatmap_optim", index=i)
                 self.dgse = optim_energy(
                     depth0,
                     depth_map,
@@ -339,6 +344,7 @@ class DynFu:
                     self.dgw,
                     self._kdtree,
                     K,
+                    plot_heatmap_step_,
                 )
 
                 # update Tlw

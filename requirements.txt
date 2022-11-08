@@ -3,3 +3,5 @@ einops
 # functorch
 vedo
 pytest
+kaleido  
+plotly

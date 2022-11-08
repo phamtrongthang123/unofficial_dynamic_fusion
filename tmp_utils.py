@@ -11,7 +11,8 @@ import time
 import matplotlib.pyplot as plt
 import os
 from typing import List, Set, Dict, Tuple, Optional, Union, Any
-
+import plotly.express as px
+import torch 
 
 # Radius-based spatial subsampling
 def uniform_sample(arr: np.ndarray, radius: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -89,7 +90,7 @@ def compose_se3(R: torch.tensor, t: torch.tensor) -> torch.tensor:
 def robust_Tukey_penalty(value: torch.tensor, c: torch.tensor) -> torch.tensor:
     # https://mathworld.wolfram.com/TukeysBiweight.html
     ae = torch.abs(value)
-    return torch.where(ae > c, 0.0, value * (1 - value**2 / c**2) ** 2).type_as(
+    return torch.where(ae > c, torch.tensor(0.0).float(), value * (1 - value**2 / c**2) ** 2).type_as(
         value
     )
 
@@ -337,7 +338,8 @@ def warp_helper(
     dgw: torch.tensor,
     node_to_nn: torch.tensor,
 ) -> torch.tensor:
-    """_summary_
+    """This function will warp the Xc from canonical space into live frame for you.
+    Please wrap this function inside a vmap before using.
 
     Args:
         Xc (torch.tensor): _description_
@@ -353,8 +355,6 @@ def warp_helper(
     dgv_nn = dgv[node_to_nn]
     dgw_nn = dgw[node_to_nn]
     dgse_nn = dgse[node_to_nn]
-    assert dgse_nn.shape == (4, 8)
-    assert dgv_nn.shape == (4, 3)
     T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
     R, t = decompose_se3(T.type_as(Xc))
     Xt = (
@@ -405,6 +405,13 @@ def plot_vis_depthmap(depth_map: torch.tensor, vis_dir: str, i: int) -> None:
     plt.savefig(f"{vis_dir}/{str(i).zfill(6)}.jpg")
     plt.close()
 
+
+def plot_heatmap_step(a: torch.tensor, vis_dir: str, index: int, step: int) -> None:
+    os.makedirs(vis_dir, exist_ok=True)
+    b= a.abs().sum(dim=0).cpu()
+
+    fig = px.imshow(b, text_auto=True)
+    fig.write_image(f"{vis_dir}/{str(index).zfill(6)}_{str(step).zfill(3)}.png", scale=6, width=700, height=700)
 
 # the translation part has some problem when convert back and forth, I will need to investigate it
 def quat_from_rot(_rot: torch.tensor) -> torch.tensor:
