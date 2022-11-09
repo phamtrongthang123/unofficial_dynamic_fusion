@@ -27,7 +27,7 @@ from tmp_utils import (
 import time
 from functorch import vmap, jacrev
 from icp import compute_normal, compute_vertex
-from typing import List, Set, Dict, Tuple, Optional, Union, Any
+from typing import Container, List, Set, Dict, Tuple, Optional, Union, Any
 
 
 def data_term(
@@ -131,8 +131,8 @@ def energy(
     data_vmap = vmap(data_term, in_dims=(0, None, None, None, None, 0))
     data_val = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
     reg_val = reg_term(Tlw, dgv, dgse, dgw, dgv_nn)
-    # re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
-    re = data_val
+    re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
+    # re = data_val
     return re, re
 
 
@@ -166,7 +166,7 @@ def optim_energy(
     Returns:
         torch.tensor: _description_
     """
-    knn = 3
+    knn = 12
     vertex0 = compute_vertex(depth0, K)
     normal0 = compute_normal(vertex0)
     mask0 = depth0 > 0.0
@@ -176,10 +176,14 @@ def optim_energy(
     H, W = mask0.shape
     res = []
     node_to_nn = []
+    t1 = time.time()
     for y in range(H):
         for x in range(W):
             if mask0[y, x] and mask_hat[y, x]:
                 dists, idx = kdtree.query(vertex_map[y, x].cpu(), k=knn, workers=-1)
+                # If there are missing neighbors, skip the point
+                if dgv.shape[0] in idx:
+                    continue
                 node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
                 res.append(
                     torch.stack(
@@ -191,6 +195,7 @@ def optim_energy(
                         ]
                     )
                 )
+    print("done corrs: ", time.time()-t1)
     node_to_nn = torch.stack(node_to_nn)
     dists, idx = kdtree.query(dgv.cpu(), k=range(2, 2 + knn), workers=-1)
     dgv_nn = torch.tensor(idx).type_as(dgv).long()
@@ -199,10 +204,11 @@ def optim_energy(
     assert len(node_to_nn.shape) == 2  # filtered_dim, 4
     energy_jac = jacrev(energy, argnums=3, has_aux=True)
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
-    print("Start optimize! ")
+    # print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw)  # to counter not full rank
     bs = 1  # res.shape[0]
-    for i in range(5):
+    for i in range(15):
+        t1 = time.time()
         jse3, fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
         lmda = torch.mean(jse3.abs()) 
         # print("done se3")
@@ -211,7 +217,7 @@ def optim_energy(
         tmp_A = torch.einsum("bnij,bnjl->bnil", jT, j).view(
             bs * len(dgv), 8, 8
         )  # [bs*n_node,8,8]
-        plot_heatmap_(a=tmp_A.view(-1,8,8), step=i)
+        plot_heatmap_(a=tmp_A.view(-1,8,8))
         A = (tmp_A + lmda * I.view(1, 1, 8, 8)).view(
             bs * len(dgv), 8, 8
         )  #  [bs*n_node,8,8]
@@ -241,6 +247,7 @@ def optim_energy(
             # torch.min(jse3[jse3.abs() > 0].abs()),
             torch.mean(jse3),
             torch.mean(jse3.abs()),
+            time.time() - t1
         )
     return dgse
 
@@ -256,7 +263,7 @@ class DynFu:
         """        
         self.subsample_rate = 5.0
         self.args = args
-        self.knn = 3
+        self.knn = 12
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # device = torch.device("cpu")
         self.dataset = OurDataset(
@@ -283,17 +290,19 @@ class DynFu:
         H, W = self.dataset.H, self.dataset.W
         t, poses, poses_gt = list(), list(), list()
         Tlw, depth1, color1 = None, None, None
-        for i in range(0, len(self.dataset), 1):
+        for i_ in range(0, len(self.dataset), 1):
+            # start from frame 20
+            i = i_- 35
+            if i <0: continue
             t0 = get_time()
-            sample = self.dataset[i]
+            sample = self.dataset[i_]
             color0, depth0, pose_gt, K = sample  # use live image as template image (0)
-            # depth0[depth0 <= 0.5] = 0.
+            plot_vis_depthmap(depth0, f"{args.save_dir}/vis_gt", i)
 
             if i == 0:  # initialize
                 Tlw = pose_gt
             else:  # tracking
-
-                Tlw_i = torch.inverse(Tlw).to(self.device)
+                print("Start optimize! ")
                 verts, faces, norms = self.tsdf_volume.get_mesh(istorch=True)
                 partial_tsdf = trimesh.Trimesh(
                     vertices=verts, faces=faces, vertex_normals=norms
@@ -301,50 +310,53 @@ class DynFu:
                 partial_tsdf.export(
                     os.path.join(args.save_dir, f"mesh_{str(i).zfill(6)}.obj")
                 )
-                # warp vertices to live frame
-                verts = warp_to_live_frame(
-                    verts, Tlw_i, self.dgv, self.dgse, self.dgw, self._kdtree
-                )
-                partial_tsdf = trimesh.Trimesh(
-                    vertices=verts, faces=faces, vertex_normals=norms
-                )
-                partial_tsdf.export(
-                    os.path.join(args.save_dir, f"warped_mesh_{str(i).zfill(6)}.obj")
-                )
-                # render depth, vertex and normal
-                image_size = [H, W]
-                # we already use Tlw_i in warping, so no need of passing it into rendering function
-                pose_tmp = torch.eye(4).to(self.device)
-                depth_map, normal_map, vertex_map = render_depth(
-                    pose_tmp[:3, :3].view(1, 3, 3),
-                    pose_tmp[:3, 3].view(1, 3),
-                    K.view(1, 3, 3),
-                    verts,
-                    faces,
-                    image_size,
-                    self.device,
-                )
+                for j in range(10):
 
-                plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
+                    Tlw_i = torch.inverse(Tlw).to(self.device)
+                    # warp vertices to live frame
+                    verts_warp = warp_to_live_frame(
+                        verts, Tlw_i, self.dgv, self.dgse, self.dgw, self._kdtree
+                    )
+                    partial_tsdf = trimesh.Trimesh(
+                        vertices=verts_warp, faces=faces, vertex_normals=norms
+                    )
+                    partial_tsdf.export(
+                        os.path.join(args.save_dir, f"warped_mesh_{str(i).zfill(6)}.obj")
+                    )
+                    # render depth, vertex and normal
+                    image_size = [H, W]
+                    # we already use Tlw_i in warping, so no need of passing it into rendering function
+                    pose_tmp = torch.eye(4).to(self.device)
+                    depth_map, normal_map, vertex_map = render_depth(
+                        pose_tmp[:3, :3].view(1, 3, 3),
+                        pose_tmp[:3, 3].view(1, 3),
+                        K.view(1, 3, 3),
+                        verts_warp,
+                        faces,
+                        image_size,
+                        self.device,
+                    )
 
-                # T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
-                # Tlw = Tlw @ T10
-                Tlw_i = torch.inverse(Tlw).to(self.device)
-                # optim energy and set dgse
-                plot_heatmap_step_ = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_heatmap_optim", index=i)
-                self.dgse = optim_energy(
-                    depth0,
-                    depth_map,
-                    normal_map,
-                    vertex_map,
-                    Tlw_i,
-                    self.dgv,
-                    self.dgse,
-                    self.dgw,
-                    self._kdtree,
-                    K,
-                    plot_heatmap_step_,
-                )
+                    plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
+                    # if j ==0:
+                    # T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
+                    # Tlw = Tlw @ T10
+                    Tlw_i = torch.inverse(Tlw).to(self.device)
+                    # optim energy and set dgse
+                    plot_heatmap_step_ = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_heatmap_optim", index=i, step=j)
+                    self.dgse = optim_energy(
+                        depth0,
+                        depth_map,
+                        normal_map,
+                        vertex_map,
+                        Tlw_i,
+                        self.dgv,
+                        self.dgse,
+                        self.dgw,
+                        self._kdtree,
+                        K,
+                        plot_heatmap_step_,
+                    )
 
                 # update Tlw
 
@@ -379,7 +391,7 @@ class DynFu:
                 except Exception as e:
                     print(f"Failed to update graph because of {e}! ")
                 # pass
-            if i == 420:
+            if i == 53:
                 break
         avg_time = np.array(t).mean()
         print(

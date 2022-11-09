@@ -7,7 +7,7 @@ import torch
 from scipy.spatial import KDTree
 from numpy import linalg as la
 import time 
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, plot_heatmap_step, warp_helper, robust_Tukey_penalty
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, plot_heatmap_step, warp_helper, robust_Tukey_penalty, SE3_dq
 import numpy as np 
 from functorch import vmap, vjp, jacrev, jacfwd, hessian, jvp, grad
 from einops import rearrange, reduce, repeat
@@ -207,7 +207,7 @@ def test_energy_2d():
 
     ## ============== INPUT ==============
     ### Constants
-    knn = 3
+    knn = 5
     _radius = torch.tensor(0.025)
     ### Our inputs
     Xc = torch.tensor([[0,i,0] for i in range(1,6)]).flip(dims=(0,)).float()
@@ -245,6 +245,8 @@ def test_energy_2d():
     warp_for_me_please = vmap(warp_helper, in_dims=(0, None, None, None, None, 0))
     energy_jac = jacrev(energy, argnums=3, has_aux=True)
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
+    se3_vmap = vmap(SE3, in_dims=(0))
+    dq_vmap = vmap(SE3_dq, in_dims=(0))
     print("Start optimize! ")
     I = torch.eye(8).type_as(Tlw)  # to counter not full rank
     bs = 1  # res.shape[0]
@@ -270,6 +272,11 @@ def test_energy_2d():
         solved_delta = torch.linalg.lstsq(A, b)
         solved_delta = post_process_solved_delta(solved_delta, bs, dgv, dgse)
         # update
+        # dgse_tmp = se3_vmap(dgse)
+        # sde_tmp = se3_vmap(solved_delta)
+        # print(solved_delta[4],'\n', sde_tmp[4])
+        # out_tmp = torch.einsum("btij,btjk->bik", dgse_tmp, sde_tmp)
+        # dgse = dq_vmap(out_tmp)
         dgse -= solved_delta
         # dgse -= 0.05*jse3
         dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)

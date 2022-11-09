@@ -14,7 +14,7 @@ voxel_size: 0.02
 #     vol_origin = vol_bnds[:, 0]
 #     return vol_dims, vol_origin, voxel_size
 n_pyramids: 3 # self.scales = list(range(self.n_pyr))
-n_iters: [2, 2, 2] # self.icp_solvers += [ICP(self.n_iters[i], damping=self.dampings[i])]
+n_iters: [1,0, 0] # self.icp_solvers += [ICP(self.n_iters[i], damping=self.dampings[i])]
 dampings: [1.0e-4, 1.0e-4, 1.0e-2] # param damping, damping added to Hessian matrix
 n_steps: 192 # param n_samples: number of samples along the ray
 fuse_color: false
