@@ -10,7 +10,7 @@ from functorch import vmap
 import time
 import matplotlib.pyplot as plt
 import os
-from typing import List, Set, Dict, Tuple, Optional, Union, Any
+from typing import Callable, List, Set, Dict, Tuple, Optional, Union, Any
 import plotly.express as px
 import torch 
 
@@ -405,6 +405,17 @@ def plot_vis_depthmap(depth_map: torch.tensor, vis_dir: str, i: int) -> None:
     plt.savefig(f"{vis_dir}/{str(i).zfill(6)}.jpg")
     plt.close()
 
+def plot_vis_activemap(activation_map: torch.tensor, vis_dir: str, index: int) -> None:
+    os.makedirs(vis_dir, exist_ok=True)
+    plt.figure()
+    plt.imshow(activation_map.detach().cpu())  # (h,w)
+    plt.colorbar(label="Activation map")
+    plt.title("Activation map")
+    plt.xlabel("X Pixel")
+    plt.ylabel("Y Pixel")
+    plt.savefig(f"{vis_dir}/{str(index).zfill(6)}.jpg")
+    plt.close()
+
 
 def plot_heatmap_step(a: torch.tensor, vis_dir: str, index: int, step: int) -> None:
     os.makedirs(vis_dir, exist_ok=True)
@@ -531,3 +542,35 @@ def mat34(dq: torch.tensor) -> torch.tensor:
         (torch.cat((r, t.view(3, 1)), dim=1), torch.tensor([0, 0, 0, 1]).view(1, 4)),
         dim=0,
     )
+
+
+
+
+def make_q0(theta: torch.tensor) -> torch.tensor:
+    return torch.cos(torch.norm(theta))
+def make_q1(theta: torch.tensor) -> torch.tensor:
+    return theta[0]*torch.sinc(torch.norm(theta))
+def make_q2(theta: torch.tensor) -> torch.tensor:
+    return theta[1]*torch.sinc(torch.norm(theta))
+def make_q3(theta: torch.tensor) -> torch.tensor:
+    return theta[2]*torch.sinc(torch.norm(theta))
+
+def make_q4(theta: torch.tensor, t: torch.tensor) -> torch.tensor:
+    return -1/2 * (t[0]*make_q1(theta) + t[1]*make_q2(theta) + t[2]*make_q3(theta))
+
+def make_q5(theta: torch.tensor, t: torch.tensor) -> torch.tensor:
+    return 1/2 * (t[0]*make_q0(theta) + t[1]*make_q3(theta) - t[2]*make_q2(theta))
+def make_q6(theta: torch.tensor, t: torch.tensor) -> torch.tensor:
+    return 1/2 * (-t[0]*make_q3(theta) + t[1]*make_q0(theta) + t[2]*make_q1(theta))
+def make_q7(theta,t: torch.tensor) -> torch.tensor:
+    return 1/2 * (t[0]*make_q2(theta)- t[1]*make_q1(theta) + t[2]*make_q0(theta))
+def make_dq(theta, t: torch.tensor) -> torch.tensor:
+    return torch.stack([make_q0(theta),make_q1(theta), make_q2(theta), make_q3(theta),make_q4(theta,t) , make_q5(theta,t), make_q6(theta,t), make_q7(theta,t)])
+
+def make_dq_from_vec(vec: torch.tensor) -> torch.tensor:
+    theta = vec[:3]
+    t = vec[3:]
+    return make_dq(theta, t)
+
+def get_vmap_make_dq_from_vec() -> Any:
+    return vmap(make_dq_from_vec, in_dims=(0))

@@ -23,6 +23,8 @@ from tmp_utils import (
     plot_vis_depthmap,
     SE3_dq,
     plot_heatmap_step,
+    plot_vis_activemap,
+    get_vmap_make_dq_from_vec,
 )
 import time
 from functorch import vmap, jacrev
@@ -57,7 +59,7 @@ def data_term(
     gt_n = gt_Xc[1]
     Xt = warp_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn)
     # if you want it to similar to surfel warp, uncomment the lines below
-    e = gt_n.dot(gt_v - Xt).view(1, 1) ** 2 # + 0.1 * torch.linalg.norm(Xt - gt_v) ** 2
+    e = gt_n.dot(gt_v - Xt).view(1, 1) ** 2 
     re = e
     # or using tukey like in DynFu paper.
     # e = gt_n.dot(Xt - gt_v).view(1,1)
@@ -129,10 +131,15 @@ def energy(
         Tuple[torch.tensor, torch.tensor]: _description_
     """
     data_vmap = vmap(data_term, in_dims=(0, None, None, None, None, 0))
-    data_val = data_vmap(gt_Xc, Tlw, dgv, dgse, dgw, node_to_nn).mean()
-    reg_val = reg_term(Tlw, dgv, dgse, dgw, dgv_nn)
-    re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
-    # re = data_val
+    make_dq_from_vec_vmap = get_vmap_make_dq_from_vec()
+    dgse_dq = make_dq_from_vec_vmap(dgse)
+    data_val_tmp = data_vmap(gt_Xc, Tlw, dgv, dgse_dq, dgw, node_to_nn)
+    # data_val_tmp2 = torch.where(torch.tensor(data_val_tmp >1e-5),data_val_tmp, torch.tensor(0.0).type_as(data_val_tmp))
+    # data_val = data_val_tmp2.sum() / torch.tensor(data_val_tmp >1e-5).sum()
+    data_val = data_val_tmp.mean()
+    reg_val = reg_term(Tlw, dgv, dgse_dq, dgw, dgv_nn)
+    # re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
+    re = data_val
     return re, re
 
 
@@ -147,7 +154,8 @@ def optim_energy(
     dgw: torch.tensor,
     kdtree: Any,
     K: torch.tensor,
-    plot_heatmap_: Any
+    _knn: int,
+    plot_func_dict: Any
 ) -> torch.tensor:
     """_summary_
 
@@ -162,40 +170,94 @@ def optim_energy(
         dgw (torch.tensor): _description_
         kdtree (Any): _description_
         K (torch.tensor): _description_
+        _knn (int): _description_
+        plot_func_dict (Any): _description_
 
     Returns:
         torch.tensor: _description_
     """
-    knn = 12
+    # RED for ground truth  
+    RED = (255,0,0)
+    # YELLOW for predicted / our projection  
+    YELLOW = (255,255,0)
+    # GREEN for both active 
+    GREEN = (0,255, 0)
+    knn = _knn
     vertex0 = compute_vertex(depth0, K)
     normal0 = compute_normal(vertex0)
     mask0 = depth0 > 0.0
     mask_hat = depth_map > 0.0
-    # for data term
-    assert mask_hat.shape == (480, 640)
+    # assert mask_hat.shape == (480, 640)
+    t1 = time.time()
     H, W = mask0.shape
+    activated_map = torch.zeros(H,W,3)
     res = []
     node_to_nn = []
-    t1 = time.time()
-    for y in range(H):
-        for x in range(W):
-            if mask0[y, x] and mask_hat[y, x]:
-                dists, idx = kdtree.query(vertex_map[y, x].cpu(), k=knn, workers=-1)
-                # If there are missing neighbors, skip the point
-                if dgv.shape[0] in idx:
-                    continue
-                node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
-                res.append(
-                    torch.stack(
-                        [
-                            vertex0[y, x],
-                            normal0[y, x],
-                            vertex_map[y, x],
-                            normal_map[y, x],
-                        ]
-                    )
-                )
-    print("done corrs: ", time.time()-t1)
+    mask0_idx  = (mask0 ).nonzero(as_tuple=False)
+    mask_hat_idx = (mask_hat  ).nonzero(as_tuple=False)
+    activated_map[mask0_idx[:,0],mask0_idx[:,1] ] = torch.tensor(RED).float()
+    activated_map[mask_hat_idx[:,0],mask_hat_idx[:,1] ] = torch.tensor(YELLOW).float()
+    # map onto: depth0  -> our. 
+    anchor_mask =  mask_hat_idx
+    onto_mask =   mask0_idx
+    kdtree2d = KDTree(anchor_mask.cpu())
+    d, ii = kdtree2d.query(onto_mask.cpu(), k=1, workers=-1)
+    ii = ii[ii != anchor_mask.shape[0]]
+    anchor_mask_mapped_idx = anchor_mask[ii]
+    # activated_map[anchor_mask_mapped_idx[:,0],anchor_mask_mapped_idx[:,1] ] = torch.tensor(GREEN).float()
+    for i in range(anchor_mask_mapped_idx.shape[0]):
+        y0,x0 = onto_mask[i]
+        y,x = anchor_mask_mapped_idx[i]
+        if y0 == y and x == x0:
+            continue
+        activated_map[y,x] = torch.tensor(GREEN).float()
+        dists, idx = kdtree.query(vertex_map[y, x].cpu(), k=knn, workers=-1)
+        # If there are missing neighbors, skip the point
+        if dgv.shape[0] in idx:
+            continue
+        node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
+        res.append(
+            torch.stack(
+                [
+                    vertex0[y0, x0],
+                    normal0[y0, x0],
+                    vertex_map[y, x],
+                    normal_map[y, x],
+                ]
+            )
+        )
+    # map onto: our -> depth0  . 
+    anchor_mask =   mask0_idx
+    onto_mask =  mask_hat_idx
+    kdtree2d = KDTree(anchor_mask.cpu())
+    d, ii = kdtree2d.query(onto_mask.cpu(), k=1, workers=-1)
+    ii = ii[ii != anchor_mask.shape[0]]
+    anchor_mask_mapped_idx = anchor_mask[ii]
+    # activated_map[anchor_mask_mapped_idx[:,0],anchor_mask_mapped_idx[:,1] ] = torch.tensor(GREEN).float()
+    for i in range(anchor_mask_mapped_idx.shape[0]):
+        y0,x0 = anchor_mask_mapped_idx[i]
+        y,x =  onto_mask[i]
+        # if y0 == y and x == x0:
+        #     continue
+        activated_map[y0,x0] = torch.tensor(GREEN).float()
+        dists, idx = kdtree.query(vertex_map[y, x].cpu(), k=knn, workers=-1)
+        # If there are missing neighbors, skip the point
+        if dgv.shape[0] in idx:
+            continue
+        node_to_nn.append(torch.tensor(idx).type_as(vertex_map).long())
+        res.append(
+            torch.stack(
+                [
+                    vertex0[y0, x0],
+                    normal0[y0, x0],
+                    vertex_map[y, x],
+                    normal_map[y, x],
+                ]
+            )
+        )
+
+    print("done corrs: ", len(res), time.time()-t1)
+    plot_func_dict['plot_activemap'](activation_map=activated_map)
     node_to_nn = torch.stack(node_to_nn)
     dists, idx = kdtree.query(dgv.cpu(), k=range(2, 2 + knn), workers=-1)
     dgv_nn = torch.tensor(idx).type_as(dgv).long()
@@ -205,50 +267,81 @@ def optim_energy(
     energy_jac = jacrev(energy, argnums=3, has_aux=True)
     dqnorm_vmap = vmap(dqnorm, in_dims=0)
     # print("Start optimize! ")
-    I = torch.eye(8).type_as(Tlw)  # to counter not full rank
+    I = torch.eye(6).type_as(Tlw)  # to counter not full rank
     bs = 1  # res.shape[0]
-    for i in range(15):
+    lr = 1.0
+    old_loss = 999
+    patient = 0
+    aggressive = 0
+    backup_dgse = None
+    for i in range(300):
         t1 = time.time()
         jse3, fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
-        lmda = torch.mean(jse3.abs()) 
+        # lmda = torch.mean(jse3.abs()) 
+        lmda = torch.mean(jse3.abs(), dim = 1)
         # print("done se3")
-        j = jse3.view(bs, len(dgv), 1, 8)  # [bs,n_node,1,8]
-        jT = custom_transpose_batch(j, isknn=True)  # [bs,n_node, 8,1]
+        j = jse3.view(bs, len(dgv), 1, 6)  # [bs,n_node,1,6]
+        jT = custom_transpose_batch(j, isknn=True)  # [bs,n_node, 6,1]
         tmp_A = torch.einsum("bnij,bnjl->bnil", jT, j).view(
-            bs * len(dgv), 8, 8
-        )  # [bs*n_node,8,8]
-        plot_heatmap_(a=tmp_A.view(-1,8,8))
-        A = (tmp_A + lmda * I.view(1, 1, 8, 8)).view(
-            bs * len(dgv), 8, 8
-        )  #  [bs*n_node,8,8]
+            bs * len(dgv), 6, 6
+        )  # [bs*n_node,6,6]
+        plot_func_dict['plot_heatmap'](a=tmp_A.view(-1,6,6))
+        # A = (tmp_A + lmda * I.view(1, 1, 6, 6)).view(
+        #     bs * len(dgv), 6, 6
+        # )  #  [bs*n_node,6,6]
+        A = (tmp_A + torch.einsum('b,ij -> bij',lmda, I.view( 6, 6))).view(
+            bs * len(dgv), 6, 6
+        )  #  [bs*n_node,6,6]
         b = torch.einsum("bnij,bj->bni", jT, fx.view(bs, 1)).view(
-            bs * len(dgv), 8, 1
-        )  # [bs*n_node, 8, 1]
-        solved_delta = torch.linalg.lstsq(A, b)
-        solved_delta = solved_delta.solution.view(bs, len(dgv), 8).mean(dim=0)
+            bs * len(dgv), 6, 1
+        )  # [bs*n_node, 6, 1]
+        A = torch.linalg.cholesky(A)
+        solved_delta = torch.cholesky_solve(b, A)
+        # solved_delta = torch.linalg.lstsq(A, b)
+        # solved_delta = solved_delta.solution.view(bs, len(dgv), 6).mean(dim=0)
+        solved_delta = solved_delta.view(bs, len(dgv), 6).mean(dim=0)
         # eliminate nan and inf
         solved_delta = torch.where(
             torch.any(torch.isnan(solved_delta.view(dgse.shape))).view(-1, 1),
-            torch.zeros(8).type_as(dgse),
+            torch.zeros(6).type_as(dgse),
             solved_delta.view(dgse.shape),
         )
         solved_delta = torch.where(
             torch.any(torch.isinf(solved_delta.view(dgse.shape))).view(-1, 1),
-            torch.zeros(8).type_as(dgse),
+            torch.zeros(6).type_as(dgse),
             solved_delta.view(dgse.shape),
         )
         # update
-        dgse -=  solved_delta
-        dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
+        backup_dgse = dgse.clone()
+        dgse -=  lr*solved_delta
+        # dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
+        plot_func_dict['plot_dgse'](a=dgse.view(1,-1,6))
         print(
             "log: ",
             torch.sum(fx),
-            lmda,
+            lr,
+            lmda.mean(), # i don't need to see all samples :'( 
             # torch.min(jse3[jse3.abs() > 0].abs()),
             torch.mean(jse3),
             torch.mean(jse3.abs()),
             time.time() - t1
         )
+        if old_loss == 999:
+            old_loss = torch.sum(fx)
+        elif old_loss < torch.sum(fx):
+            patient += 1 
+            if patient == 3:
+                dgse = backup_dgse
+                patient = 0 
+                lr = lr/2
+        elif old_loss > torch.sum(fx):
+            old_loss = torch.sum(fx) 
+            aggressive += 1
+            if aggressive == 10:
+                aggressive = 0
+                lr = lr*2
+        if torch.sum(fx) < 5e-5:
+            break
     return dgse
 
 
@@ -256,14 +349,14 @@ class DynFu:
     """_summary_
     """    
     def __init__(self, args: Any) -> None:
-        """_summary_
+        """This function will initialize all necessary parameters.
 
         Args:
             args (Any): _description_
         """        
         self.subsample_rate = 5.0
         self.args = args
-        self.knn = 12
+        self.knn = 4
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # device = torch.device("cpu")
         self.dataset = OurDataset(
@@ -271,7 +364,7 @@ class DynFu:
             self.device,
             near=args.near,
             far=args.far,
-            img_scale=1.0,
+            img_scale=0.25,
         )
         self.vol_dims, self.vol_origin, self.voxel_size = get_volume_setting(args)
         self.tsdf_volume = TSDFVolumeTorch(
@@ -290,6 +383,7 @@ class DynFu:
         H, W = self.dataset.H, self.dataset.W
         t, poses, poses_gt = list(), list(), list()
         Tlw, depth1, color1 = None, None, None
+        make_dq_from_vec_vmap = get_vmap_make_dq_from_vec()
         for i_ in range(0, len(self.dataset), 1):
             # start from frame 20
             i = i_- 35
@@ -314,8 +408,9 @@ class DynFu:
 
                     Tlw_i = torch.inverse(Tlw).to(self.device)
                     # warp vertices to live frame
+                    dgse_dq = make_dq_from_vec_vmap(self.dgse)
                     verts_warp = warp_to_live_frame(
-                        verts, Tlw_i, self.dgv, self.dgse, self.dgw, self._kdtree
+                        verts, Tlw_i, self.dgv, dgse_dq, self.dgw, self._kdtree
                     )
                     partial_tsdf = trimesh.Trimesh(
                         vertices=verts_warp, faces=faces, vertex_normals=norms
@@ -339,11 +434,14 @@ class DynFu:
 
                     plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
                     # if j ==0:
-                    # T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
-                    # Tlw = Tlw @ T10
+                    #     T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
+                    #     Tlw = Tlw @ T10
                     Tlw_i = torch.inverse(Tlw).to(self.device)
                     # optim energy and set dgse
                     plot_heatmap_step_ = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_heatmap_optim", index=i, step=j)
+                    plot_dgse = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_dgse", index=i, step=j)
+                    plot_vis_activemap_ = partial(plot_vis_activemap, vis_dir=f"{args.save_dir}/vis_activemap_optim", index=i)
+                    plot_func_dict = {'plot_heatmap':plot_heatmap_step_, 'plot_activemap': plot_vis_activemap_, 'plot_dgse': plot_dgse}
                     self.dgse = optim_energy(
                         depth0,
                         depth_map,
@@ -355,7 +453,8 @@ class DynFu:
                         self.dgw,
                         self._kdtree,
                         K,
-                        plot_heatmap_step_,
+                        self.knn,
+                        plot_func_dict,
                     )
 
                 # update Tlw
@@ -430,7 +529,7 @@ class DynFu:
         """_summary_
         """        
         verts, faces, norms = self.tsdf_volume.get_mesh()
-        self._radius = 0.025  # the paper said e = 0.01 in experiment
+        self._radius = 0.05  # the paper said e = 0.01 in experiment
         self._vertices = verts
         self._faces = faces
         nodes_v, nodes_idx = uniform_sample(self._vertices, self._radius)
@@ -440,7 +539,7 @@ class DynFu:
         dgw = []
         for j in range(len(self.dgv)):
             dgse.append(
-                torch.tensor([1, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]).float()
+                torch.tensor([ 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]).float()
             )
             dgw.append(torch.tensor(3.0 * self._radius))
         self.dgse = torch.stack(dgse).to(self.device)
