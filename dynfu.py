@@ -460,22 +460,22 @@ class DynFu:
                     plot_dgse = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_dgse", index=i, step=j)
                     plot_vis_activemap_ = partial(plot_vis_activemap, vis_dir=f"{args.save_dir}/vis_activemap_optim", index=i)
                     plot_func_dict = {'plot_heatmap':plot_heatmap_step_, 'plot_activemap': plot_vis_activemap_, 'plot_dgse': plot_dgse}
-                    self.dgse, last_loss = optim_energy(
-                        depth0,
-                        depth_map,
-                        normal_map,
-                        vertex_map,
-                        Tlw_i,
-                        self.dgv,
-                        self.dgse,
-                        self.dgw,
-                        self._kdtree,
-                        K,
-                        self.knn,
-                        plot_func_dict,
-                    )
-                    if last_loss < 1e-5:
-                        break
+                    # self.dgse, last_loss = optim_energy(
+                    #     depth0,
+                    #     depth_map,
+                    #     normal_map,
+                    #     vertex_map,
+                    #     Tlw_i,
+                    #     self.dgv,
+                    #     self.dgse,
+                    #     self.dgw,
+                    #     self._kdtree,
+                    #     K,
+                    #     self.knn,
+                    #     plot_func_dict,
+                    # )
+                    # if last_loss < 1e-5:
+                    #     break
 
                 # update Tlw
 
@@ -485,15 +485,18 @@ class DynFu:
                     depth0, K, Tlw, obs_weight=1.0, color_img=color0
                 )
             else:
-                self.tsdf_volume.integrate_dynamic(depth0,
-                                    self.dgv,
-                                    self.dgse,
-                                    self.dgw,
-                                    self._kdtree,
-                                    K,
-                                    Tlw,
-                                    obs_weight=1.,
-                                    color_img=color0)
+                self.tsdf_volume.integrate(
+                    depth0, K, Tlw, obs_weight=1.0, color_img=color0
+                )
+                # self.tsdf_volume.integrate_dynamic(depth0,
+                #                     self.dgv,
+                #                     self.dgse,
+                #                     self.dgw,
+                #                     self._kdtree,
+                #                     K,
+                #                     Tlw,
+                #                     obs_weight=1.,
+                #                     color_img=color0)
             t1 = get_time()
             t += [t1 - t0]
             print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
