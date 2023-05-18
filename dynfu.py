@@ -434,7 +434,7 @@ class DynFu:
                     )
 
                     plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
-                    if j %3 ==0:
+                    if j %1 ==0:
                         T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
                         Tlw = Tlw @ T10
                         # after rigid icp, make sure to render depth again. 
@@ -510,8 +510,8 @@ class DynFu:
                 except Exception as e:
                     print(f"Failed to update graph because of {e}! ")
                 # pass
-            if i == 53:
-                break
+            # if i == 53:
+            #     break
         avg_time = np.array(t).mean()
         print(
             "average processing time: {:f}s per frame, i.e. {:f} fps".format(
