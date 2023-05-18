@@ -2,7 +2,7 @@ import numpy as np
 import os 
 from pathlib import Path 
 import shutil
-seq003 = '/home/ptthang/data_mount/KinectFusion/seq003'
+seq003 = '/home/ptthang/data_mount/KinectFusion/seq026'
 outdir = Path(seq003)/'processed'
 intrinsic_txt = os.path.join(seq003, 'intrinsics.txt')
 depth_original = Path(seq003)/'depth'
