@@ -1,0 +1,20 @@
+data_root: "/home/ptthang/data_mount/KinectFusion/seq026"
+# data_type: "fr1"
+near: 0.1
+far: 1.8
+# depth /= 1000.  # I take our unit is 1 meter, so /1000 to make it go back to 1m
+# invalid = (depth < near) | (depth > far)
+# depth[invalid] = -1.
+vol_bounds: [-0.5, 1.0, -0.7, 0.7, -0.01, 1.81] # x1,x2,y1,y2,z1,z2
+voxel_size: 0.02
+# def get_volume_setting(args):
+#     voxel_size = args.voxel_size
+#     vol_bnds = np.array(args.vol_bounds).reshape(3, 2)
+#     vol_dims = (vol_bnds[:, 1] - vol_bnds[:, 0]) // voxel_size + 1
+#     vol_origin = vol_bnds[:, 0]
+#     return vol_dims, vol_origin, voxel_size
+n_pyramids: 3 # self.scales = list(range(self.n_pyr))
+n_iters: [2, 2, 2] # self.icp_solvers += [ICP(self.n_iters[i], damping=self.dampings[i])]
+dampings: [1.0e-4, 1.0e-4, 1.0e-2] # param damping, damping added to Hessian matrix
+n_steps: 192 # param n_samples: number of samples along the ray
+fuse_color: false
