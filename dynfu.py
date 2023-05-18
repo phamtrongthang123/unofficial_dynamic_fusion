@@ -274,7 +274,7 @@ def optim_energy(
     patient = 0
     aggressive = 0
     backup_dgse = None
-    for i in range(50):
+    for i in range(5):
         t1 = time.time()
         jse3, fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
         if torch.sum(fx) < 1e-5:
@@ -405,7 +405,7 @@ class DynFu:
                 partial_tsdf.export(
                     os.path.join(args.save_dir, f"mesh_{str(i).zfill(6)}.obj")
                 )
-                for j in range(300):
+                for j in range(3):
 
                     Tlw_i = torch.inverse(Tlw).to(self.device)
                     # warp vertices to live frame
@@ -434,7 +434,7 @@ class DynFu:
                     )
 
                     plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
-                    if j %30 ==0:
+                    if j %3 ==0:
                         T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
                         Tlw = Tlw @ T10
                         # after rigid icp, make sure to render depth again. 
