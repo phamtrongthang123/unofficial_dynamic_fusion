@@ -303,13 +303,14 @@ def test_energy_2d():
         A = (tmp_A + torch.einsum('b,ij -> bij',lmda, I.view( 6, 6))).view(
             bs * len(dgv), 6, 6
         )  #  [bs*n_node,6,6]
-        A = torch.linalg.cholesky(A)
         b = torch.einsum("bnij,bj->bni", jT, fx.view(bs, 1)).view(
             bs * len(dgv), 6, 1
         )  # [bs*n_node, 6, 1]
         # solved_delta = torch.linalg.lstsq(A, b)
-        solved_delta = torch.cholesky_solve(b, A)
+        # A = torch.linalg.cholesky(A)
+        # solved_delta = torch.cholesky_solve(b, A)
         # print(solved_delta.shape)
+        solved_delta = torch.linalg.solve(A, b)
         solved_delta = post_process_solved_delta(solved_delta, bs, dgv, dgse)
         # update
         # dgse_tmp = se3_vmap(dgse)
@@ -317,7 +318,7 @@ def test_energy_2d():
         # print(solved_delta[4],'\n', sde_tmp[4])
         # out_tmp = torch.einsum("btij,btjk->bik", dgse_tmp, sde_tmp)
         # dgse = dq_vmap(out_tmp)
-        dgse -= 2*solved_delta
+        dgse -= solved_delta
         # dgse -= 0.05*jse3
         # dgse = dqnorm_vmap(dgse.view(-1, 6)).view(len(dgv), 6)
         plot_heatmap_step(dgse.view(1,-1,6),vis_dir=f"tests/vis_dgse",index=0,step=i)

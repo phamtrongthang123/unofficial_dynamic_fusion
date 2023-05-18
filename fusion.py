@@ -5,7 +5,7 @@ import torch
 import cv2
 import open3d as o3d
 import imageio
-from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame
+from tmp_utils import SE3, decompose_se3, blending, get_diag, dqnorm, custom_transpose_batch, get_W, render_depth, average_edge_dist_in_face, robust_Tukey_penalty, warp_helper, warp_to_live_frame, get_vmap_make_dq_from_vec
 import time
 
 def integrate_dynamic(
@@ -30,8 +30,10 @@ def integrate_dynamic(
     print("Start integrate!", world_c.shape)
     world_c = world_c[:,:3]
     world2cam = torch.inverse(cam_pose)
+    make_dq_from_vec_vmap = get_vmap_make_dq_from_vec()
+    dgse_dq = make_dq_from_vec_vmap(dgse)
     # warp the model first 
-    world_c_warped = warp_to_live_frame(world_c.cpu(), world2cam, dgv, dgse, dgw,  kdtree, device="cuda")
+    world_c_warped = warp_to_live_frame(world_c.cpu(), world2cam, dgv, dgse_dq, dgw,  kdtree, device="cuda")
     # assert world_c_warped.shape == world_c.shape
     # convert to pixel and start if else-ing    
     # cam_c = torch.matmul(world2cam, world_c.transpose(1, 0)).transpose(1, 0).float()  # [nx*ny*nz, 4]

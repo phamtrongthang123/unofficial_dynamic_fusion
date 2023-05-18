@@ -3,5 +3,5 @@ einops
 # functorch
 vedo
 pytest
-kaleido  
+kaleido==0.1.0 # This package could hang the program, if you don't need it, don't use it.
 plotly

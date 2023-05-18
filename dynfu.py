@@ -138,8 +138,8 @@ def energy(
     # data_val = data_val_tmp2.sum() / torch.tensor(data_val_tmp >1e-5).sum()
     data_val = data_val_tmp.mean()
     reg_val = reg_term(Tlw, dgv, dgse_dq, dgw, dgv_nn)
-    # re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
-    re = data_val
+    re = ((data_val + 5*reg_val) / 2).float() # 5 = lambda in surfelwarp paper
+    # re = data_val
     return re, re
 
 
@@ -177,11 +177,11 @@ def optim_energy(
         torch.tensor: _description_
     """
     # RED for ground truth  
-    RED = (255,0,0)
+    RED = (1,0,0)
     # YELLOW for predicted / our projection  
-    YELLOW = (255,255,0)
+    YELLOW = (1,1,0)
     # GREEN for both active 
-    GREEN = (0,255, 0)
+    GREEN = (0,1, 0)
     knn = _knn
     vertex0 = compute_vertex(depth0, K)
     normal0 = compute_normal(vertex0)
@@ -237,8 +237,8 @@ def optim_energy(
     for i in range(anchor_mask_mapped_idx.shape[0]):
         y0,x0 = anchor_mask_mapped_idx[i]
         y,x =  onto_mask[i]
-        # if y0 == y and x == x0:
-        #     continue
+        if y0 == y and x == x0:
+            continue
         activated_map[y0,x0] = torch.tensor(GREEN).float()
         dists, idx = kdtree.query(vertex_map[y, x].cpu(), k=knn, workers=-1)
         # If there are missing neighbors, skip the point
@@ -274,18 +274,20 @@ def optim_energy(
     patient = 0
     aggressive = 0
     backup_dgse = None
-    for i in range(300):
+    for i in range(50):
         t1 = time.time()
         jse3, fx = energy_jac(res, Tlw, dgv, dgse, dgw, node_to_nn, dgv_nn)
+        if torch.sum(fx) < 1e-5:
+            break
         # lmda = torch.mean(jse3.abs()) 
-        lmda = torch.mean(jse3.abs(), dim = 1)
+        lmda = torch.mean(jse3.abs(), dim = 1) + 1e-8
         # print("done se3")
         j = jse3.view(bs, len(dgv), 1, 6)  # [bs,n_node,1,6]
         jT = custom_transpose_batch(j, isknn=True)  # [bs,n_node, 6,1]
         tmp_A = torch.einsum("bnij,bnjl->bnil", jT, j).view(
             bs * len(dgv), 6, 6
         )  # [bs*n_node,6,6]
-        plot_func_dict['plot_heatmap'](a=tmp_A.view(-1,6,6))
+        # plot_func_dict['plot_heatmap'](a=tmp_A.view(-1,6,6))
         # A = (tmp_A + lmda * I.view(1, 1, 6, 6)).view(
         #     bs * len(dgv), 6, 6
         # )  #  [bs*n_node,6,6]
@@ -295,9 +297,10 @@ def optim_energy(
         b = torch.einsum("bnij,bj->bni", jT, fx.view(bs, 1)).view(
             bs * len(dgv), 6, 1
         )  # [bs*n_node, 6, 1]
-        A = torch.linalg.cholesky(A)
-        solved_delta = torch.cholesky_solve(b, A)
+        # A = torch.linalg.cholesky(A)
+        # solved_delta = torch.cholesky_solve(b, A)
         # solved_delta = torch.linalg.lstsq(A, b)
+        solved_delta = torch.linalg.solve(A, b)
         # solved_delta = solved_delta.solution.view(bs, len(dgv), 6).mean(dim=0)
         solved_delta = solved_delta.view(bs, len(dgv), 6).mean(dim=0)
         # eliminate nan and inf
@@ -315,7 +318,7 @@ def optim_energy(
         backup_dgse = dgse.clone()
         dgse -=  lr*solved_delta
         # dgse = dqnorm_vmap(dgse.view(-1, 8)).view(len(dgv), 8)
-        plot_func_dict['plot_dgse'](a=dgse.view(1,-1,6))
+        # plot_func_dict['plot_dgse'](a=dgse.view(1,-1,6))
         print(
             "log: ",
             torch.sum(fx),
@@ -339,10 +342,8 @@ def optim_energy(
             aggressive += 1
             if aggressive == 10:
                 aggressive = 0
-                lr = lr*2
-        if torch.sum(fx) < 5e-5:
-            break
-    return dgse
+                lr = min(lr*2,8.0)
+    return dgse.clone(), torch.sum(fx)
 
 
 class DynFu:
@@ -386,7 +387,7 @@ class DynFu:
         make_dq_from_vec_vmap = get_vmap_make_dq_from_vec()
         for i_ in range(0, len(self.dataset), 1):
             # start from frame 20
-            i = i_- 35
+            i = i_- 37
             if i <0: continue
             t0 = get_time()
             sample = self.dataset[i_]
@@ -404,7 +405,7 @@ class DynFu:
                 partial_tsdf.export(
                     os.path.join(args.save_dir, f"mesh_{str(i).zfill(6)}.obj")
                 )
-                for j in range(10):
+                for j in range(300):
 
                     Tlw_i = torch.inverse(Tlw).to(self.device)
                     # warp vertices to live frame
@@ -433,16 +434,33 @@ class DynFu:
                     )
 
                     plot_vis_depthmap(depth_map, f"{args.save_dir}/vis", i)
-                    # if j ==0:
-                    #     T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
-                    #     Tlw = Tlw @ T10
-                    Tlw_i = torch.inverse(Tlw).to(self.device)
+                    if j %30 ==0:
+                        T10 = self.icp_tracker(depth0, depth_map, K)  # transform from 0 to 1
+                        Tlw = Tlw @ T10
+                        # after rigid icp, make sure to render depth again. 
+                        Tlw_i = torch.inverse(Tlw).to(self.device)
+                        verts_warp = warp_to_live_frame(
+                            verts, Tlw_i, self.dgv, dgse_dq, self.dgw, self._kdtree
+                        )
+                        # render depth, vertex and normal
+                        image_size = [H, W]
+                        # we already use Tlw_i in warping, so no need of passing it into rendering function
+                        pose_tmp = torch.eye(4).to(self.device)
+                        depth_map, normal_map, vertex_map = render_depth(
+                            pose_tmp[:3, :3].view(1, 3, 3),
+                            pose_tmp[:3, 3].view(1, 3),
+                            K.view(1, 3, 3),
+                            verts_warp,
+                            faces,
+                            image_size,
+                            self.device,
+                        )
                     # optim energy and set dgse
                     plot_heatmap_step_ = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_heatmap_optim", index=i, step=j)
                     plot_dgse = partial(plot_heatmap_step, vis_dir=f"{args.save_dir}/vis_dgse", index=i, step=j)
                     plot_vis_activemap_ = partial(plot_vis_activemap, vis_dir=f"{args.save_dir}/vis_activemap_optim", index=i)
                     plot_func_dict = {'plot_heatmap':plot_heatmap_step_, 'plot_activemap': plot_vis_activemap_, 'plot_dgse': plot_dgse}
-                    self.dgse = optim_energy(
+                    self.dgse, last_loss = optim_energy(
                         depth0,
                         depth_map,
                         normal_map,
@@ -456,6 +474,8 @@ class DynFu:
                         self.knn,
                         plot_func_dict,
                     )
+                    if last_loss < 1e-5:
+                        break
 
                 # update Tlw
 
@@ -464,16 +484,16 @@ class DynFu:
                 self.tsdf_volume.integrate(
                     depth0, K, Tlw, obs_weight=1.0, color_img=color0
                 )
-            # else:
-            #     self.tsdf_volume.integrate_dynamic(depth0,
-            #                         self.dgv,
-            #                         self.dgse,
-            #                         self.dgw,
-            #                         self._kdtree,
-            #                         K,
-            #                         Tlw,
-            #                         obs_weight=1.,
-            #                         color_img=color0)
+            else:
+                self.tsdf_volume.integrate_dynamic(depth0,
+                                    self.dgv,
+                                    self.dgse,
+                                    self.dgw,
+                                    self._kdtree,
+                                    K,
+                                    Tlw,
+                                    obs_weight=1.,
+                                    color_img=color0)
             t1 = get_time()
             t += [t1 - t0]
             print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
@@ -529,7 +549,7 @@ class DynFu:
         """_summary_
         """        
         verts, faces, norms = self.tsdf_volume.get_mesh()
-        self._radius = 0.05  # the paper said e = 0.01 in experiment
+        self._radius = 0.1  # the paper said e = 0.01 in experiment
         self._vertices = verts
         self._faces = faces
         nodes_v, nodes_idx = uniform_sample(self._vertices, self._radius)
@@ -572,13 +592,15 @@ class DynFu:
         def get_se3_helper(Xc, Tlw, dgv, dgse, dgw, node_to_nn):
             dgv_nn = dgv[node_to_nn]
             dgw_nn = dgw[node_to_nn]
-            dgse_nn = dgse[node_to_nn]
-            assert dgse_nn.shape == (4, 8)
-            assert dgv_nn.shape == (4, 3)
+            make_dq_from_vec_vmap = get_vmap_make_dq_from_vec()
+            dgse_dq = make_dq_from_vec_vmap(dgse)
+            dgse_nn = dgse_dq[node_to_nn]
+            # assert dgse_nn.shape == (4, 8)
+            # assert dgv_nn.shape == (4, 3)
             T = get_W(Xc, Tlw, dgse_nn, dgw_nn, dgv_nn)
-            print(T)
+            # print(T)
             re_dq = dqnorm(SE3_dq(T.view(4, 4)))
-            print(re_dq)
+            # print(re_dq)
             return re_dq.view(8)
 
         get_se3_helper_vmap = vmap(
