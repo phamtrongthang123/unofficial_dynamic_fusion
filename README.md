@@ -1,12 +1,7 @@
-# KinectFusion implemented in Python with PyTorch
+# Unoffical implementation of Dynamic Fusion
+This repo is not an official implementation of the paper [DynamicFusion: Reconstruction and Tracking of Non-Rigid Scenes in Real-Time (CVPR 2015)](https://www.microsoft.com/en-us/research/wp-content/uploads/2015/05/DynamicFusion.pdf). The code is a work in progress and is not yet complete. The goal is to implement the core functionalities of the paper and to provide a simple and easy to understand codebase for learning purposes.
+The tree stucture is hard to follow and I haven't find a way to bring it to pytorch.
 
-<img src="images/kinfu.gif" height=240px align="right"/>
-
-This is a lightweight Python implementation of [KinectFusion](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ismar2011.pdf). All the core functions (TSDF volume, frame-to-model tracking, point-to-plane ICP, raycasting, TSDF fusion, etc.) are implemented using pure PyTorch, i.e. no custom CUDA kernels. 
-
-Although without any custom CUDA functions, the system could still run at a fairly fast speed: The demo reconstructs the [TUM fr1_desk sequence](https://vision.in.tum.de/data/datasets/rgbd-dataset/download#) into a 225 x 171 x 111 TSDF volume with 2cm resolution at round 17 FPS with a single RTX-2080 GPU (~1.5 FPS in CPU mode) 
-
-Note that this project is mainly for study purpose, and is not fully optimized for accurate camera tracking.
 
 ## Requirements
 The core functionalities were implemented in PyTorch (1.10). Open3D (0.14.0) is used for visualisation. Other important dependancies include:
@@ -23,35 +18,10 @@ conda env create -f environment.yml
 conda activate kinfu
 ```
 
-## Data Preparation
-The code was tested on [TUM dataset](https://vision.in.tum.de/data/datasets/rgbd-dataset/download). After downloading the raw sequences, you will need to run the pre-processing script under `dataset/`. For example:
 
-```
-python dataset/preprocess.py --config configs/fr1_desk.yaml
-```
-
-There are some example config files under [`configs/`](https://github.com/JingwenWang95/KinectFusion/tree/master/configs) which correspond to different sequences. You need to replace [`data_root`](https://github.com/JingwenWang95/KinectFusion/blob/master/configs/fr1_desk.yaml#L1) to your own sequence directory before running the script. 
-After running the script a new directory `processed/` will appear under your sequence directory. 
-
-## Run
-After obtaining the processed sequence, you can simply run `kinfu.py`. For example:
-
-```
-python kinfu.py --config configs/fr1_desk.yaml --save_dir reconstruct/fr1_desk
-python kinfu_our.py --config configs/seq006.yaml --save_dir reconstruct/seq006
-```
-
-which will perform the tracking and mapping headlessly and save the results. Or you could run:
-
-```
-python kinfu_gui.py --config configs/fr1_desk.yaml
-python kinfu_gui_our.py --config configs/seq006.yaml
-```
-
-If you want to visualize the tracking and reconstruction process on-the-fly.
 
 ## Acknowledgement
-The code of ICP tracker was heavily borrowed from [Binbin Xu](https://github.com/binbin-xu). Also thank Binbin for implementing part of the TSDF volume code which is inspired by [Andy Zeng's tsdf-fusion-python](https://github.com/andyzeng/tsdf-fusion-python).
+This code is heavily dependent on [JingwenWang95's KinectFusion implementation](https://github.com/JingwenWang95/KinectFusion). 
 
 ## References
  * [KinectFusion: Real-Time Dense Surface Mapping and Tracking (ISMAR 2011)](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ismar2011.pdf)
